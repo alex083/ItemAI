@@ -1,0 +1,207 @@
+import uuid
+
+from django.contrib.auth import authenticate
+from django.db.models import Q
+from django.utils.text import slugify
+from openai import APIError
+from rest_framework import status
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action, api_view
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.viewsets import ModelViewSet
+
+from .deepseek import DeepSeekError, generate_product_copy
+from .models import Integration, Product, Profile, PromptTemplate
+from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly, is_admin
+from .providers import ProviderError, fetch_available_models
+from .serializers import (
+    GenerateProductSerializer,
+    IntegrationSerializer,
+    LoginSerializer,
+    ProductSerializer,
+    ProfileSerializer,
+    PromptTemplateSerializer,
+    RegisterSerializer,
+    user_payload,
+)
+
+
+@api_view(["GET"])
+def health(_request: Request) -> Response:
+    return Response({"status": "ok"})
+
+
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = authenticate(
+            request,
+            username=serializer.validated_data["username"],
+            password=serializer.validated_data["password"],
+        )
+        if user is None:
+            return Response(
+                {"detail": "Invalid username or password"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({"token": token.key, **user_payload(user)})
+
+
+class RegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({"token": token.key, **user_payload(user)}, status=status.HTTP_201_CREATED)
+
+
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request) -> Response:
+        return Response(user_payload(request.user))
+
+
+class IntegrationViewSet(ModelViewSet):
+    serializer_class = IntegrationSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+
+    def get_permissions(self):
+        if self.action == "available_models":
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsAdminOrReadOnly()]
+
+    def get_queryset(self):
+        queryset = Integration.objects.all()
+        if not (self.request.user.is_staff or self.request.user.is_superuser):
+            queryset = queryset.filter(is_active=True)
+        return queryset
+
+    @action(detail=False, methods=["post"], url_path="available-models")
+    def available_models(self, request: Request) -> Response:
+        api_url = (request.data.get("api_url") or "").strip()
+        api_key = (request.data.get("api_key") or "").strip()
+        integration_id = request.data.get("integration")
+        profile_id = request.data.get("profile")
+
+        if profile_id not in (None, ""):
+            profile = (
+                Profile.objects.select_related("integration")
+                .filter(pk=profile_id)
+                .filter(Q(user=request.user) | Q(user__isnull=True))
+                .first()
+            )
+            if profile is None:
+                return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
+            if profile.user_id == request.user.id and profile.DeepSeekApiKey:
+                api_key = api_key or profile.DeepSeekApiKey
+            if integration_id in (None, "") and profile.integration_id:
+                integration_id = profile.integration_id
+
+        if integration_id not in (None, ""):
+            integration = self.get_queryset().filter(pk=integration_id).first()
+            if integration is None:
+                return Response({"detail": "Integration not found."}, status=status.HTTP_404_NOT_FOUND)
+            api_url = integration.api_url
+        elif not api_url:
+            return Response({"detail": "API URL is required."}, status=status.HTTP_400_BAD_REQUEST)
+        elif not is_admin(request.user):
+            return Response({"detail": "Only staff can preview an unsaved API URL."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            models = fetch_available_models(api_url=api_url, api_key=api_key)
+        except ProviderError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({"models": models})
+
+
+class PromptTemplateViewSet(ModelViewSet):
+    serializer_class = PromptTemplateSerializer
+    permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+
+    def get_queryset(self):
+        return PromptTemplate.objects.filter(is_active=True).filter(
+            Q(owner=self.request.user) | Q(owner__isnull=True)
+        )
+
+    def perform_create(self, serializer):
+        title = serializer.validated_data["title"]
+        base = slugify(title) or "prompt"
+        slug = f"{base}-{self.request.user.id}-{uuid.uuid4().hex[:8]}"
+        serializer.save(owner=self.request.user, slug=slug)
+
+
+class ProfileViewSet(ModelViewSet):
+    serializer_class = ProfileSerializer
+    permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+
+    def get_queryset(self):
+        return Profile.objects.select_related("integration").filter(
+            Q(user=self.request.user) | Q(user__isnull=True)
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class ProductViewSet(ModelViewSet):
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+
+    def get_queryset(self):
+        return Product.objects.select_related("profile", "profile__integration").filter(
+            Q(profile__user=self.request.user) | Q(profile__user__isnull=True)
+        )
+
+    @action(detail=True, methods=["post"])
+    def generate(self, request: Request, pk=None) -> Response:
+        product = self.get_object()
+        payload = GenerateProductSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        custom_prompt = (payload.validated_data.get("prompt") or "").strip()
+        system_prompt = custom_prompt or product.profile.get_system_prompt()
+
+        try:
+            integration = product.profile.integration
+            result = generate_product_copy(
+                api_key=product.profile.DeepSeekApiKey,
+                system_prompt=system_prompt,
+                title=product.title,
+                base_url=integration.api_url if integration else None,
+                model=product.profile.get_generation_model() or None,
+            )
+        except DeepSeekError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except APIError as exc:
+            if getattr(exc, "status_code", None) == 402:
+                return Response(
+                    {
+                        "detail": (
+                            "The selected API account does not have enough funds. "
+                            "Top up the balance and try again."
+                        )
+                    },
+                    status=status.HTTP_402_PAYMENT_REQUIRED,
+                )
+            return Response(
+                {"detail": f"API request failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        product.description = result["description"]
+        product.google_product_category = result["google_product_category"]
+        product.save(update_fields=["description", "google_product_category"])
+        data = self.get_serializer(product).data
+        data["google_product_category_path"] = result["google_product_category_path"]
+        return Response(data)
