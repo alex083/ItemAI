@@ -1,12 +1,14 @@
 import { IconLoader2 } from "@tabler/icons-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
   createProduct,
   deleteProduct,
+  exportProductsToCsv,
   generateProduct,
   getProfile,
+  importProductsFromCsv,
   listAvailableModels,
   listIntegrations,
   listProducts,
@@ -34,6 +36,9 @@ export function ProfileDetailPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showImportForm, setShowImportForm] = useState(false);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [externalId, setExternalId] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -43,11 +48,21 @@ export function ProfileDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   function resetCreateForm() {
     setTitle("");
     setExternalId("");
     setShowCreateForm(false);
+  }
+
+  function resetImportForm() {
+    setCsvFile(null);
+    if (csvInputRef.current) {
+      csvInputRef.current.value = "";
+    }
+    setShowImportForm(false);
   }
 
   async function refresh() {
@@ -64,6 +79,10 @@ export function ProfileDetailPage() {
       void loadModels(nextProfile.integration, nextProfile.model);
     }
     setProducts(allProducts.filter((item) => item.profile === profileId));
+    setSelectedIds((current) => {
+      const visible = new Set(allProducts.filter((item) => item.profile === profileId).map((item) => item.id));
+      return current.filter((id) => visible.has(id));
+    });
   }
 
   useEffect(() => {
@@ -157,6 +176,7 @@ export function ProfileDetailPage() {
     event.preventDefault();
     setBusy(true);
     setError(null);
+    setImportMessage(null);
     try {
       await createProduct({
         title: title.trim(),
@@ -167,6 +187,39 @@ export function ProfileDetailPage() {
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not create product");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onImportCsv(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!csvFile) {
+      setError("Choose a CSV file first.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setImportMessage(null);
+    try {
+      const result = await importProductsFromCsv(profileId, csvFile);
+      resetImportForm();
+      await refresh();
+      const skipped = result.skipped
+        ? ` Skipped ${result.skipped} row${result.skipped === 1 ? "" : "s"}.`
+        : "";
+      if (result.created) {
+        setImportMessage(`Imported ${result.created} product${result.created === 1 ? "" : "s"}.${skipped}`);
+      } else {
+        const firstError = result.errors[0];
+        setError(
+          firstError
+            ? `No products were imported. Row ${firstError.row}: ${firstError.detail}`
+            : "No products were imported.",
+        );
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not import CSV");
     } finally {
       setBusy(false);
     }
@@ -193,6 +246,34 @@ export function ProfileDetailPage() {
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not delete product");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleSelected(productId: number) {
+    setSelectedIds((current) =>
+      current.includes(productId) ? current.filter((id) => id !== productId) : [...current, productId],
+    );
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((current) => (current.length === products.length ? [] : products.map((item) => item.id)));
+  }
+
+  async function onExport(ids?: number[]) {
+    setBusy(true);
+    setError(null);
+    setImportMessage(null);
+    try {
+      await exportProductsToCsv(profileId, ids);
+      setImportMessage(
+        ids?.length
+          ? `Exported ${ids.length} selected product${ids.length === 1 ? "" : "s"}.`
+          : `Exported all ${products.length} product${products.length === 1 ? "" : "s"}.`,
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not export CSV");
     } finally {
       setBusy(false);
     }
@@ -227,15 +308,29 @@ export function ProfileDetailPage() {
               : "Shared profile. View only."}
           </p>
         </div>
-        {profile.can_edit && !showCreateForm ? (
-          <Button className="shrink-0" onClick={() => setShowCreateForm(true)}>
-            Create product
-          </Button>
+        {profile.can_edit && !showCreateForm && !showImportForm ? (
+          <div className="flex shrink-0 flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowImportForm(true);
+                setError(null);
+              }}
+            >
+              Import CSV
+            </Button>
+            <Button onClick={() => setShowCreateForm(true)}>Create product</Button>
+          </div>
         ) : null}
       </div>
       {error ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+      {importMessage ? (
+        <Alert>
+          <AlertDescription>{importMessage}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -276,49 +371,137 @@ export function ProfileDetailPage() {
         </Card>
       ) : null}
 
+      {profile.can_edit && showImportForm ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Import products from CSV</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form className="flex flex-col gap-4" onSubmit={onImportCsv}>
+              <div className="space-y-2">
+                <Label htmlFor="csv-file">CSV file</Label>
+                <input
+                  id="csv-file"
+                  ref={csvInputRef}
+                  className="hidden"
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => setCsvFile(event.target.files?.[0] ?? null)}
+                />
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => csvInputRef.current?.click()}
+                  >
+                    Choose file
+                  </Button>
+                  <span className={cn("truncate text-sm", csvFile ? "text-foreground" : "text-muted-foreground")}>
+                    {csvFile ? csvFile.name : "No file selected"}
+                  </span>
+                </div>
+                <FieldHint>
+                  Required column: title (or name). Optional: external_id, barcode, group_id, description,
+                  google_product_category. Comma or semicolon separators are supported.
+                </FieldHint>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" disabled={busy || !csvFile}>
+                  Import products
+                </Button>
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    resetImportForm();
+                    setError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="flex flex-col gap-3">
         {products.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {profile.can_edit
-              ? "This profile has no products yet. Click “Create product”."
+              ? "This profile has no products yet. Create one or import a CSV."
               : "This profile has no products yet."}
           </p>
         ) : (
-          products.map((product) => (
-            <Card key={product.id} size="sm">
-              <CardContent className="flex items-center justify-between gap-3">
-                <Link to={`/profiles/${profileId}/products/${product.id}`} className="min-w-0">
-                  <h2 className="font-medium">{product.title}</h2>
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {product.description || "Description not generated yet"}
-                  </p>
-                </Link>
-                <div className="flex shrink-0 gap-2">
-                  <Link
-                    className={cn(buttonVariants({ size: "sm" }))}
-                    to={`/profiles/${profileId}/products/${product.id}`}
-                  >
-                    Open
-                  </Link>
-                  {profile.can_edit ? (
-                    <>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={generatingId === product.id}
-                        onClick={() => void onGenerate(product.id)}
-                      >
-                        {generatingId === product.id ? <IconLoader2 className="animate-spin" /> : "Generate"}
-                      </Button>
-                      <Button variant="outline" size="sm" disabled={busy} onClick={() => void onDelete(product.id)}>
-                        Delete
-                      </Button>
-                    </>
-                  ) : null}
-                </div>
-              </CardContent>
-            </Card>
-          ))
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-foreground"
+                  checked={selectedIds.length === products.length}
+                  onChange={toggleSelectAll}
+                />
+                {selectedIds.length ? `${selectedIds.length} selected` : "Select all"}
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy || selectedIds.length === 0}
+                  onClick={() => void onExport(selectedIds)}
+                >
+                  Export selected
+                </Button>
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => void onExport()}>
+                  Export all
+                </Button>
+              </div>
+            </div>
+            {products.map((product) => (
+              <Card key={product.id} size="sm">
+                <CardContent className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="size-4 shrink-0 accent-foreground"
+                      checked={selectedIds.includes(product.id)}
+                      onChange={() => toggleSelected(product.id)}
+                      aria-label={`Select ${product.title}`}
+                    />
+                    <Link to={`/profiles/${profileId}/products/${product.id}`} className="min-w-0">
+                      <h2 className="font-medium">{product.title}</h2>
+                    </Link>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Link
+                      className={cn(buttonVariants({ size: "sm" }))}
+                      to={`/profiles/${profileId}/products/${product.id}`}
+                    >
+                      Open
+                    </Link>
+                    {profile.can_edit ? (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={generatingId === product.id}
+                          onClick={() => void onGenerate(product.id)}
+                        >
+                          {generatingId === product.id ? <IconLoader2 className="animate-spin" /> : "Generate"}
+                        </Button>
+                        <Button variant="outline" size="sm" disabled={busy} onClick={() => void onDelete(product.id)}>
+                          Delete
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </>
         )}
       </div>
 

@@ -2,17 +2,20 @@ import uuid
 
 from django.contrib.auth import authenticate
 from django.db.models import Q
+from django.http import HttpResponse
 from django.utils.text import slugify
 from openai import APIError
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
+from .csv_import import CsvImportError, build_product_csv, parse_product_csv
 from .deepseek import DeepSeekError, generate_product_copy
 from .models import Integration, Product, Profile, PromptTemplate
 from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly, is_admin
@@ -21,6 +24,8 @@ from .serializers import (
     GenerateProductSerializer,
     IntegrationSerializer,
     LoginSerializer,
+    ProductCsvExportSerializer,
+    ProductCsvImportSerializer,
     ProductSerializer,
     ProfileSerializer,
     PromptTemplateSerializer,
@@ -162,6 +167,57 @@ class ProductViewSet(ModelViewSet):
         return Product.objects.select_related("profile", "profile__integration").filter(
             Q(profile__user=self.request.user) | Q(profile__user__isnull=True)
         )
+
+    @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser, FormParser])
+    def import_csv(self, request: Request) -> Response:
+        serializer = ProductCsvImportSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.validated_data["profile"]
+        uploaded = serializer.validated_data["file"]
+
+        try:
+            payload, parse_errors = parse_product_csv(uploaded.read())
+        except CsvImportError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        created = Product.objects.bulk_create(
+            [Product(profile=profile, **fields) for fields in payload],
+            batch_size=500,
+        )
+        return Response(
+            {
+                "created": len(created),
+                "skipped": len(parse_errors),
+                "errors": parse_errors[:50],
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["post"], url_path="export")
+    def export_csv(self, request: Request) -> HttpResponse:
+        serializer = ProductCsvExportSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        profile = serializer.validated_data["profile"]
+        ids = serializer.validated_data.get("ids")
+
+        queryset = self.get_queryset().filter(profile=profile).order_by("id")
+        if ids is not None:
+            queryset = queryset.filter(id__in=ids)
+            found = set(queryset.values_list("id", flat=True))
+            missing = [product_id for product_id in ids if product_id not in found]
+            if missing:
+                return Response(
+                    {"detail": f"Products not found in this profile: {', '.join(map(str, missing))}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        products = list(queryset)
+        if not products:
+            return Response({"detail": "No products to export."}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = HttpResponse(build_product_csv(products), content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="products-profile-{profile.id}.csv"'
+        return response
 
     @action(detail=True, methods=["post"])
     def generate(self, request: Request, pk=None) -> Response:

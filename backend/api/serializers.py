@@ -139,3 +139,39 @@ class ProductSerializer(serializers.ModelSerializer):
 
 class GenerateProductSerializer(serializers.Serializer):
     prompt = serializers.CharField(required=False, allow_blank=True)
+
+
+class ProductCsvImportSerializer(serializers.Serializer):
+    profile = serializers.PrimaryKeyRelatedField(queryset=Profile.objects.all())
+    file = serializers.FileField()
+
+    def validate_profile(self, profile: Profile) -> Profile:
+        request = self.context["request"]
+        if profile.user_id != request.user.id:
+            raise serializers.ValidationError("You can only use your own profile.")
+        return profile
+
+    def validate_file(self, uploaded):
+        name = (getattr(uploaded, "name", "") or "").lower()
+        if name and not name.endswith(".csv"):
+            raise serializers.ValidationError("Upload a .csv file.")
+        size = getattr(uploaded, "size", 0) or 0
+        if size > 5 * 1024 * 1024:
+            raise serializers.ValidationError("CSV is too large (max 5 MB).")
+        return uploaded
+
+
+class ProductCsvExportSerializer(serializers.Serializer):
+    profile = serializers.PrimaryKeyRelatedField(queryset=Profile.objects.all())
+    ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=False,
+    )
+
+    def validate_profile(self, profile: Profile) -> Profile:
+        request = self.context["request"]
+        if profile.user_id not in (None, request.user.id):
+            raise serializers.ValidationError("You do not have access to this profile.")
+        return profile
+

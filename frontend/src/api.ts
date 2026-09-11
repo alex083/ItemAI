@@ -44,10 +44,12 @@ async function readError(response: Response) {
   return `Request failed: ${response.status}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, json = true): Promise<T> {
   const token = getToken();
   const headers = new Headers(init?.headers);
-  headers.set("Content-Type", "application/json");
+  if (json) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) {
     headers.set("Authorization", `Token ${token}`);
   }
@@ -240,6 +242,50 @@ export function createProduct(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export type ProductCsvImportResult = {
+  created: number;
+  skipped: number;
+  errors: { row: number; detail: string }[];
+};
+
+export function importProductsFromCsv(profileId: number, file: File) {
+  const body = new FormData();
+  body.append("profile", String(profileId));
+  body.append("file", file);
+  return request<ProductCsvImportResult>("/api/products/import/", { method: "POST", body }, false);
+}
+
+export async function exportProductsToCsv(profileId: number, ids?: number[]) {
+  const token = getToken();
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (token) {
+    headers.set("Authorization", `Token ${token}`);
+  }
+
+  const response = await fetch("/api/products/export/", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(ids?.length ? { profile: profileId, ids } : { profile: profileId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = /filename="?([^"]+)"?/i.exec(disposition);
+  const filename = match?.[1] || `products-profile-${profileId}.csv`;
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function deleteProduct(id: number) {
