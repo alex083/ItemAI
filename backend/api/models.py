@@ -1,5 +1,9 @@
+import uuid
+
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 from .prompts import DEFAULT_PRODUCT_PROMPT
 
@@ -33,6 +37,7 @@ class Integration(models.Model):
     name = models.CharField(max_length=200, unique=True)
     api_url = models.URLField(max_length=500)
     model = models.CharField(max_length=300, blank=True)
+    image_model = models.CharField(max_length=300, blank=True)
     # Built-in platform key (admin-only). Never expose via API responses.
     api_key = models.CharField(max_length=500, blank=True)
     is_platform_default = models.BooleanField(default=False)
@@ -74,6 +79,7 @@ class Profile(models.Model):
     )
     DeepSeekApiKey = models.CharField(max_length=200, blank=True)
     model = models.CharField(max_length=300, blank=True)
+    image_model = models.CharField(max_length=300, blank=True)
     prompt_template = models.ForeignKey(
         PromptTemplate,
         on_delete=models.SET_NULL,
@@ -82,6 +88,7 @@ class Profile(models.Model):
         related_name="profiles",
     )
     Prompt = models.TextField(blank=True)
+    image_prompt = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:
@@ -101,6 +108,16 @@ class Profile(models.Model):
         if self.integration_id and self.integration.model:
             return self.integration.model
         return ""
+
+    def get_image_model(self) -> str:
+        if self.image_model.strip():
+            return self.image_model.strip()
+        if self.integration_id and self.integration.image_model:
+            return self.integration.image_model.strip()
+        return ""
+
+    def get_image_prompt(self) -> str:
+        return self.image_prompt.strip()
 
     def resolve_api_key(self) -> str:
         if self.key_mode == self.KeyMode.PLATFORM:
@@ -140,6 +157,36 @@ class Product(models.Model):
         ordering = ["-created_at", "title", "google_product_category", "profile"]
 
 
+def product_image_upload_path(instance: "ProductImage", filename: str) -> str:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+    return f"products/{instance.product_id}/{uuid.uuid4().hex}.{ext}"
+
+
+class ProductImage(models.Model):
+    class Source(models.TextChoices):
+        GENERATED = "generated", "Generated"
+        UPLOADED = "uploaded", "Uploaded"
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="images")
+    image = models.ImageField(upload_to=product_image_upload_path)
+    source = models.CharField(max_length=20, choices=Source.choices, default=Source.UPLOADED)
+    is_primary = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-is_primary", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"Image #{self.pk} for product #{self.product_id}"
+
+
+@receiver(post_delete, sender=ProductImage)
+def _delete_product_image_file(sender, instance: "ProductImage", **kwargs) -> None:
+    """Always remove the file from storage, including cascade deletes from Product/Profile."""
+    if instance.image:
+        instance.image.delete(save=False)
+
+
 class Tariff(models.Model):
     class KeyPolicy(models.TextChoices):
         HYBRID = "hybrid", "Hybrid"
@@ -157,6 +204,7 @@ class Tariff(models.Model):
     number_of_products = models.IntegerField()
     number_of_profiles = models.IntegerField()
     number_of_generations = models.IntegerField()
+    number_of_image_generations = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -182,9 +230,11 @@ class UserSubscription(models.Model):
     product_limit = models.IntegerField()
     profile_limit = models.IntegerField()
     generation_limit = models.IntegerField()
+    image_generation_limit = models.IntegerField(default=0)
     product_usage = models.IntegerField(default=0)
     profile_usage = models.IntegerField(default=0)
     generation_usage = models.IntegerField(default=0)
+    image_generation_usage = models.IntegerField(default=0)
     start_date = models.DateTimeField(auto_now_add=True)
     end_date = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)

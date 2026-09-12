@@ -1,10 +1,31 @@
-import { IconLoader2 } from "@tabler/icons-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
-import { Button, Card, Input, Label, TextArea } from "@heroui/react";
+import {
+  IconDots,
+  IconDownload,
+  IconLoader2,
+  IconPhoto,
+  IconStar,
+  IconStarFilled,
+  IconTrash,
+  IconUpload,
+} from "@tabler/icons-react";
+import { type DragEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Button, Card, Dropdown, Input, Label, Tabs, TextArea, toast } from "@heroui/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { cn } from "cn";
 
-import { deleteProduct, generateProduct, getProduct, updateProduct, type Product } from "./api";
+import {
+  deleteProduct,
+  deleteProductImage,
+  generateProduct,
+  generateProductImage,
+  getMySubscription,
+  getProduct,
+  setPrimaryProductImage,
+  updateProduct,
+  uploadProductImage,
+  type Product,
+  type ProductImage,
+} from "./api";
 import { StatusBanner } from "@/components/status-banner";
 
 type FormState = {
@@ -22,6 +43,8 @@ type FormState = {
   barcode: string;
   group_id: string;
 };
+
+type FormTab = "general" | "seo" | "ecommerce" | "identifiers";
 
 function productToForm(product: Product): FormState {
   const bullets = Array.isArray(product.bullet_points) ? product.bullet_points : [];
@@ -68,6 +91,61 @@ function FieldBlock({
   );
 }
 
+function ImageActionsMenu({
+  image,
+  busy,
+  onDownload,
+  onSetPrimary,
+  onDelete,
+}: {
+  image: ProductImage;
+  busy: boolean;
+  onDownload: () => void;
+  onSetPrimary: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Dropdown>
+      <Button
+        variant="secondary"
+        size="sm"
+        aria-label="Image actions"
+        className="absolute right-2 top-2 z-10 bg-white/90 shadow-sm backdrop-blur-sm"
+        isDisabled={busy}
+      >
+        <IconDots className="size-4" />
+      </Button>
+      <Dropdown.Popover placement="bottom end">
+        <Dropdown.Menu
+          aria-label="Image actions"
+          onAction={(key) => {
+            if (key === "download") onDownload();
+            if (key === "primary") onSetPrimary();
+            if (key === "delete") onDelete();
+          }}
+          disabledKeys={[
+            ...(busy ? (["download", "primary", "delete"] as const) : []),
+            ...(image.is_primary ? (["primary"] as const) : []),
+          ]}
+        >
+          <Dropdown.Item id="download" textValue="Download">
+            <IconDownload className="size-4" />
+            <Label>Download</Label>
+          </Dropdown.Item>
+          <Dropdown.Item id="primary" textValue="Set as primary">
+            {image.is_primary ? <IconStarFilled className="size-4 text-accent" /> : <IconStar className="size-4" />}
+            <Label>{image.is_primary ? "Primary image" : "Set as primary"}</Label>
+          </Dropdown.Item>
+          <Dropdown.Item id="delete" textValue="Delete" variant="danger">
+            <IconTrash className="size-4" />
+            <Label>Delete</Label>
+          </Dropdown.Item>
+        </Dropdown.Menu>
+      </Dropdown.Popover>
+    </Dropdown>
+  );
+}
+
 export function ProductDetailPage() {
   const { id, productId } = useParams();
   const navigate = useNavigate();
@@ -75,9 +153,20 @@ export function ProductDetailPage() {
   const idNum = Number(productId);
   const [product, setProduct] = useState<Product | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [imageGenAllowed, setImageGenAllowed] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [imageGenPrompt, setImageGenPrompt] = useState("");
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const [activeTab, setActiveTab] = useState<FormTab>("general");
+  const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const isDirty = useMemo(() => {
+    if (!product || !form) return false;
+    return JSON.stringify(form) !== JSON.stringify(productToForm(product));
+  }, [product, form]);
 
   function applyProduct(next: Product) {
     setProduct(next);
@@ -86,6 +175,12 @@ export function ProductDetailPage() {
 
   async function refresh() {
     applyProduct(await getProduct(idNum));
+    try {
+      const subscription = await getMySubscription();
+      setImageGenAllowed(subscription.image_generation_limit > 0);
+    } catch {
+      setImageGenAllowed(false);
+    }
   }
 
   useEffect(() => {
@@ -93,7 +188,7 @@ export function ProductDetailPage() {
       return;
     }
     refresh().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : "Could not open product");
+      setLoadError(err instanceof Error ? err.message : "Could not open product");
     });
   }, [idNum]);
 
@@ -101,15 +196,21 @@ export function ProductDetailPage() {
     setForm((current) => (current ? { ...current, [key]: value } : current));
   }
 
+  function notifySuccess(message: string) {
+    toast.success(message);
+  }
+
+  function notifyError(message: string) {
+    toast.danger(message);
+  }
+
   async function onGenerate() {
     setBusy(true);
-    setError(null);
-    setMessage(null);
     try {
       applyProduct(await generateProduct(idNum));
-      setMessage("Generated content saved.");
+      notifySuccess("Generated content saved.");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not generate product content");
+      notifyError(err instanceof Error ? err.message : "Could not generate product content");
     } finally {
       setBusy(false);
     }
@@ -121,8 +222,6 @@ export function ProductDetailPage() {
       return;
     }
     setBusy(true);
-    setError(null);
-    setMessage(null);
     try {
       const bullet_points = form.bullet_points
         .split("\n")
@@ -145,9 +244,9 @@ export function ProductDetailPage() {
           group_id: form.group_id.trim(),
         }),
       );
-      setMessage("Product saved.");
+      notifySuccess("Product saved.");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not save product");
+      notifyError(err instanceof Error ? err.message : "Could not save product");
     } finally {
       setBusy(false);
     }
@@ -155,19 +254,120 @@ export function ProductDetailPage() {
 
   async function onDelete() {
     setBusy(true);
-    setError(null);
     try {
       await deleteProduct(idNum);
       navigate(`/profiles/${profileId}`);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not delete product");
+      notifyError(err instanceof Error ? err.message : "Could not delete product");
       setBusy(false);
     }
   }
 
+  async function onGenerateImage() {
+    setImageBusy(true);
+    try {
+      await generateProductImage(idNum, imageGenPrompt);
+      await refresh();
+      notifySuccess("Image generated.");
+    } catch (err: unknown) {
+      notifyError(err instanceof Error ? err.message : "Could not generate image");
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function onUploadImage(file: File) {
+    if (!file.type.startsWith("image/")) {
+      notifyError("Please choose an image file.");
+      return;
+    }
+    setUploadBusy(true);
+    try {
+      await uploadProductImage(idNum, file);
+      await refresh();
+      notifySuccess("Image uploaded.");
+    } catch (err: unknown) {
+      notifyError(err instanceof Error ? err.message : "Could not upload image");
+    } finally {
+      setUploadBusy(false);
+      if (imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+    }
+  }
+
+  async function onDeleteImage(imageId: number) {
+    setBusy(true);
+    try {
+      await deleteProductImage(imageId);
+      await refresh();
+      notifySuccess("Image deleted.");
+    } catch (err: unknown) {
+      notifyError(err instanceof Error ? err.message : "Could not delete image");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSetPrimaryImage(imageId: number) {
+    setBusy(true);
+    try {
+      await setPrimaryProductImage(imageId);
+      await refresh();
+      notifySuccess("Primary image updated.");
+    } catch (err: unknown) {
+      notifyError(err instanceof Error ? err.message : "Could not set primary image");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDownloadImage(imageUrl: string, filename: string) {
+    try {
+      const response = await fetch(imageUrl);
+      if (!response.ok) throw new Error("Could not fetch image");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      notifyError(err instanceof Error ? err.message : "Could not download image");
+    }
+  }
+
+  function onImageDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!uploadBusy) {
+      setImageDragActive(true);
+    }
+  }
+
+  function onImageDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setImageDragActive(false);
+  }
+
+  function onImageDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setImageDragActive(false);
+    if (uploadBusy || !product?.can_edit) return;
+    const file = event.dataTransfer.files?.[0] ?? null;
+    if (file) {
+      void onUploadImage(file);
+    }
+  }
+
   if (!product || !form) {
-    return error ? (
-      <StatusBanner>{error}</StatusBanner>
+    return loadError ? (
+      <StatusBanner>{loadError}</StatusBanner>
     ) : (
       <p className="text-sm text-muted">Loading…</p>
     );
@@ -177,7 +377,7 @@ export function ProductDetailPage() {
   const canEdit = product.can_edit;
 
   return (
-    <div className="page-stack">
+    <div className={cn("page-stack", isDirty && canEdit && "pb-20")}>
       <div className="fade-in flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <Link
@@ -202,165 +402,321 @@ export function ProductDetailPage() {
         ) : null}
       </div>
 
-      {error ? <StatusBanner>{error}</StatusBanner> : null}
-      {message ? <StatusBanner status="success">{message}</StatusBanner> : null}
-
-      <form onSubmit={onSave}>
-        <Card className="glass-panel fade-in rounded-3xl p-1">
-          <Card.Content className="grid gap-5 px-6 py-6 md:grid-cols-2">
-            <FieldBlock label="Title" htmlFor="title" className="md:col-span-2">
-              <Input
-                id="title"
-                fullWidth
-                variant="secondary"
-                value={form.title}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("title", event.target.value)}
-                required
+      <Card className="glass-panel fade-in rounded-3xl p-1">
+        <Card.Header className="flex flex-wrap items-center justify-between gap-3 px-6 pt-6">
+          <div>
+            <Card.Title>Images</Card.Title>
+            <Card.Description>
+              {imageGenAllowed
+                ? "Upload a real product photo first, then Generate to create a studio version of that same product."
+                : "Your plan does not include image generation. You can still upload photos."}
+            </Card.Description>
+          </div>
+          {canEdit ? (
+            <div className="flex flex-wrap gap-2">
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    void onUploadImage(file);
+                  }
+                }}
               />
-            </FieldBlock>
-
-            <FieldBlock label="Short description" htmlFor="short_description">
+              <Button
+                variant="outline"
+                size="sm"
+                isDisabled={uploadBusy}
+                onPress={() => imageInputRef.current?.click()}
+              >
+                {uploadBusy ? <IconLoader2 className="size-4 animate-spin" /> : <IconUpload className="size-4" />}
+                Upload
+              </Button>
+              <Button
+                size="sm"
+                isDisabled={imageBusy || !imageGenAllowed || product.images.length === 0}
+                onPress={() => void onGenerateImage()}
+              >
+                {imageBusy ? <IconLoader2 className="size-4 animate-spin" /> : <IconPhoto className="size-4" />}
+                Generate image
+              </Button>
+            </div>
+          ) : null}
+        </Card.Header>
+        <Card.Content className="px-6 pb-6">
+          {canEdit && imageGenAllowed ? (
+            <div className="mb-5 space-y-2.5">
+              <Label htmlFor="image-gen-prompt">Image prompt (optional)</Label>
               <TextArea
-                id="short_description"
-                fullWidth
-                variant="secondary"
-                rows={4}
-                value={form.short_description}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("short_description", event.target.value)}
-              />
-            </FieldBlock>
-
-            <FieldBlock label="Bullet points" htmlFor="bullet_points">
-              <TextArea
-                id="bullet_points"
-                fullWidth
-                variant="secondary"
-                rows={4}
-                value={form.bullet_points}
-                disabled={!canEdit || busy}
-                placeholder="One benefit per line"
-                onChange={(event) => setField("bullet_points", event.target.value)}
-              />
-            </FieldBlock>
-
-            <FieldBlock label="Description" htmlFor="description" className="md:col-span-2">
-              <TextArea
-                id="description"
-                fullWidth
-                variant="secondary"
-                rows={6}
-                value={form.description}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("description", event.target.value)}
-              />
-            </FieldBlock>
-
-            <FieldBlock label="Product type" htmlFor="product_type">
-              <Input
-                id="product_type"
-                fullWidth
-                variant="secondary"
-                value={form.product_type}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("product_type", event.target.value)}
-              />
-            </FieldBlock>
-
-            <FieldBlock label="Tags" htmlFor="tags">
-              <Input
-                id="tags"
-                fullWidth
-                variant="secondary"
-                value={form.tags}
-                disabled={!canEdit || busy}
-                placeholder="comma, separated, tags"
-                onChange={(event) => setField("tags", event.target.value)}
-              />
-            </FieldBlock>
-
-            <FieldBlock label="Meta title" htmlFor="meta_title">
-              <Input
-                id="meta_title"
-                fullWidth
-                variant="secondary"
-                value={form.meta_title}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("meta_title", event.target.value)}
-              />
-            </FieldBlock>
-
-            <FieldBlock label="Meta description" htmlFor="meta_description">
-              <TextArea
-                id="meta_description"
+                id="image-gen-prompt"
                 fullWidth
                 variant="secondary"
                 rows={3}
-                value={form.meta_description}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("meta_description", event.target.value)}
+                value={imageGenPrompt}
+                disabled={imageBusy}
+                placeholder="e.g. White background, soft studio light, keep the product exactly as in the photo"
+                onChange={(event) => setImageGenPrompt(event.target.value)}
               />
-            </FieldBlock>
+              <p className="text-sm text-muted">
+                Overrides the profile image prompt for this generation. Uses the primary/uploaded photo as reference.
+              </p>
+            </div>
+          ) : null}
 
-            <FieldBlock label="Google category (id)" htmlFor="google_product_category">
-              <Input
-                id="google_product_category"
-                fullWidth
-                variant="secondary"
-                value={form.google_product_category}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("google_product_category", event.target.value)}
-              />
-            </FieldBlock>
+          {canEdit ? (
+            <div
+              className={cn(
+                "mb-5 rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
+                imageDragActive
+                  ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                  : "border-divider bg-surface-secondary/60",
+                uploadBusy && "pointer-events-none opacity-70",
+              )}
+              onDragOver={onImageDragOver}
+              onDragLeave={onImageDragLeave}
+              onDrop={onImageDrop}
+            >
+              <IconUpload className="mx-auto size-7 text-muted" />
+              <p className="mt-2 text-sm font-medium">
+                {imageDragActive ? "Drop image to upload" : "Drag & drop a product photo here"}
+              </p>
+              <p className="mt-1 text-xs text-muted">or use the Upload button above</p>
+            </div>
+          ) : null}
 
-            <FieldBlock label="Google category (path)" htmlFor="google_product_category_path">
-              <Input
-                id="google_product_category_path"
-                fullWidth
-                variant="secondary"
-                value={form.google_product_category_path}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("google_product_category_path", event.target.value)}
-              />
-            </FieldBlock>
+          {product.images.length === 0 && !uploadBusy ? (
+            <p className="text-sm text-muted">
+              No images yet. Upload a real product photo, then use Generate image to improve it for your store.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+              {product.images.map((image) => (
+                <div
+                  key={image.id}
+                  className="relative aspect-square overflow-hidden rounded-2xl border border-divider bg-surface-secondary"
+                >
+                  <img src={image.image} alt={product.title} className="h-full w-full object-cover" />
+                  {image.is_primary ? (
+                    <span className="absolute left-2 top-2 rounded-full bg-accent/90 px-2 py-0.5 text-xs font-medium text-accent-foreground">
+                      Primary
+                    </span>
+                  ) : null}
+                  {canEdit ? (
+                    <ImageActionsMenu
+                      image={image}
+                      busy={busy}
+                      onDownload={() =>
+                        void onDownloadImage(
+                          image.image,
+                          image.image.split("/").pop() || `${product.title}-${image.id}.png`,
+                        )
+                      }
+                      onSetPrimary={() => void onSetPrimaryImage(image.id)}
+                      onDelete={() => void onDeleteImage(image.id)}
+                    />
+                  ) : null}
+                </div>
+              ))}
+              {uploadBusy ? (
+                <div className="flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-divider bg-surface-secondary">
+                  <IconLoader2 className="size-6 animate-spin text-muted" />
+                  <span className="text-xs text-muted">Uploading…</span>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </Card.Content>
+      </Card>
 
-            <FieldBlock label="Store ID" htmlFor="external_id">
-              <Input
-                id="external_id"
-                fullWidth
-                variant="secondary"
-                value={form.external_id}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("external_id", event.target.value)}
-              />
-            </FieldBlock>
+      <form onSubmit={onSave}>
+        <Card className="glass-panel fade-in rounded-3xl p-1">
+          <Card.Header className="px-6 pt-6">
+            <Card.Title>Product details</Card.Title>
+            <Card.Description>Edit fields by section — Save stays available under every tab.</Card.Description>
+          </Card.Header>
+          <Card.Content className="px-6 pb-6">
+            <Tabs
+              className="w-full"
+              selectedKey={activeTab}
+              onSelectionChange={(key) => setActiveTab(String(key) as FormTab)}
+            >
+              <Tabs.ListContainer className="mb-5">
+                <Tabs.List aria-label="Product detail sections" className="flex w-full flex-wrap gap-1">
+                  <Tabs.Tab id="general" className="px-3 py-2 text-sm">
+                    General
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                  <Tabs.Tab id="seo" className="px-3 py-2 text-sm">
+                    SEO
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                  <Tabs.Tab id="ecommerce" className="px-3 py-2 text-sm">
+                    E-commerce & Categories
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                  <Tabs.Tab id="identifiers" className="px-3 py-2 text-sm">
+                    Identifiers
+                    <Tabs.Indicator />
+                  </Tabs.Tab>
+                </Tabs.List>
+              </Tabs.ListContainer>
 
-            <FieldBlock label="Barcode" htmlFor="barcode">
-              <Input
-                id="barcode"
-                fullWidth
-                variant="secondary"
-                value={form.barcode}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("barcode", event.target.value)}
-              />
-            </FieldBlock>
+              <Tabs.Panel id="general" className="grid gap-5 md:grid-cols-2">
+                <FieldBlock label="Title" htmlFor="title" className="md:col-span-2">
+                  <Input
+                    id="title"
+                    fullWidth
+                    variant="secondary"
+                    value={form.title}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("title", event.target.value)}
+                    required
+                  />
+                </FieldBlock>
+                <FieldBlock label="Short description" htmlFor="short_description">
+                  <TextArea
+                    id="short_description"
+                    fullWidth
+                    variant="secondary"
+                    rows={4}
+                    value={form.short_description}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("short_description", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Bullet points" htmlFor="bullet_points">
+                  <TextArea
+                    id="bullet_points"
+                    fullWidth
+                    variant="secondary"
+                    rows={4}
+                    value={form.bullet_points}
+                    disabled={!canEdit || busy}
+                    placeholder="One benefit per line"
+                    onChange={(event) => setField("bullet_points", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Description" htmlFor="description" className="md:col-span-2">
+                  <TextArea
+                    id="description"
+                    fullWidth
+                    variant="secondary"
+                    rows={6}
+                    value={form.description}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("description", event.target.value)}
+                  />
+                </FieldBlock>
+              </Tabs.Panel>
 
-            <FieldBlock label="Group ID" htmlFor="group_id">
-              <Input
-                id="group_id"
-                fullWidth
-                variant="secondary"
-                value={form.group_id}
-                disabled={!canEdit || busy}
-                onChange={(event) => setField("group_id", event.target.value)}
-              />
-            </FieldBlock>
+              <Tabs.Panel id="seo" className="grid gap-5 md:grid-cols-2">
+                <FieldBlock label="Meta title" htmlFor="meta_title" className="md:col-span-2">
+                  <Input
+                    id="meta_title"
+                    fullWidth
+                    variant="secondary"
+                    value={form.meta_title}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("meta_title", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Meta description" htmlFor="meta_description" className="md:col-span-2">
+                  <TextArea
+                    id="meta_description"
+                    fullWidth
+                    variant="secondary"
+                    rows={4}
+                    value={form.meta_description}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("meta_description", event.target.value)}
+                  />
+                </FieldBlock>
+              </Tabs.Panel>
+
+              <Tabs.Panel id="ecommerce" className="grid gap-5 md:grid-cols-2">
+                <FieldBlock label="Product type" htmlFor="product_type">
+                  <Input
+                    id="product_type"
+                    fullWidth
+                    variant="secondary"
+                    value={form.product_type}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("product_type", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Tags" htmlFor="tags">
+                  <Input
+                    id="tags"
+                    fullWidth
+                    variant="secondary"
+                    value={form.tags}
+                    disabled={!canEdit || busy}
+                    placeholder="comma, separated, tags"
+                    onChange={(event) => setField("tags", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Google category (id)" htmlFor="google_product_category">
+                  <Input
+                    id="google_product_category"
+                    fullWidth
+                    variant="secondary"
+                    value={form.google_product_category}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("google_product_category", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Google category (path)" htmlFor="google_product_category_path">
+                  <Input
+                    id="google_product_category_path"
+                    fullWidth
+                    variant="secondary"
+                    value={form.google_product_category_path}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("google_product_category_path", event.target.value)}
+                  />
+                </FieldBlock>
+              </Tabs.Panel>
+
+              <Tabs.Panel id="identifiers" className="grid gap-5 md:grid-cols-2">
+                <FieldBlock label="Store ID" htmlFor="external_id">
+                  <Input
+                    id="external_id"
+                    fullWidth
+                    variant="secondary"
+                    value={form.external_id}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("external_id", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Barcode" htmlFor="barcode">
+                  <Input
+                    id="barcode"
+                    fullWidth
+                    variant="secondary"
+                    value={form.barcode}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("barcode", event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label="Group ID" htmlFor="group_id" className="md:col-span-2">
+                  <Input
+                    id="group_id"
+                    fullWidth
+                    variant="secondary"
+                    value={form.group_id}
+                    disabled={!canEdit || busy}
+                    onChange={(event) => setField("group_id", event.target.value)}
+                  />
+                </FieldBlock>
+              </Tabs.Panel>
+            </Tabs>
 
             {canEdit ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 md:col-span-2">
-                <Button type="submit" isDisabled={busy} isPending={busy}>
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-5">
+                <Button type="submit" isDisabled={busy || !isDirty} isPending={busy}>
                   {busy ? <IconLoader2 className="animate-spin" /> : null}
                   Save changes
                 </Button>
@@ -368,17 +724,36 @@ export function ProductDetailPage() {
                   type="button"
                   variant="outline"
                   isDisabled={busy}
-                  onPress={() => navigate(`/profiles/${profileId}`)}
+                  onPress={() => {
+                    if (isDirty) {
+                      setForm(productToForm(product));
+                      toast.info("Changes discarded.");
+                      return;
+                    }
+                    navigate(`/profiles/${profileId}`);
+                  }}
                 >
-                  Cancel
+                  {isDirty ? "Discard changes" : "Cancel"}
                 </Button>
               </div>
             ) : (
-              <p className="text-sm text-muted md:col-span-2">Shared product. View only.</p>
+              <p className="mt-6 text-sm text-muted">Shared product. View only.</p>
             )}
           </Card.Content>
         </Card>
       </form>
+
+      {canEdit && isDirty ? (
+        <div className="fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 pointer-events-none">
+          <Alert status="warning" className="pointer-events-auto w-full max-w-lg shadow-lg">
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Title>Unsaved changes</Alert.Title>
+              <Alert.Description>Save before leaving this page or your edits will be lost.</Alert.Description>
+            </Alert.Content>
+          </Alert>
+        </div>
+      ) : null}
     </div>
   );
 }

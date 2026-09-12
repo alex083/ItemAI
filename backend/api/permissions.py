@@ -1,6 +1,6 @@
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from .models import Product, Profile, PromptTemplate
+from .models import Product, ProductImage, Profile, PromptTemplate
 
 
 def is_admin(user) -> bool:
@@ -17,6 +17,8 @@ class IsOwnerOrReadOnly(BasePermission):
             return obj.owner_id == request.user.id
         if isinstance(obj, Product):
             return obj.profile.user_id == request.user.id
+        if isinstance(obj, ProductImage):
+            return obj.product.profile.user_id == request.user.id
         return False
 
 

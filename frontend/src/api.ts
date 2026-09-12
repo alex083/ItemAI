@@ -87,6 +87,7 @@ export type Integration = {
   name: string;
   api_url: string;
   model: string;
+  image_model: string;
   has_api_key: boolean;
   is_platform_default: boolean;
   is_active: boolean;
@@ -101,10 +102,23 @@ export type Profile = {
   integration: number | null;
   key_mode: ProfileKeyMode;
   model: string;
+  image_model: string;
   prompt_template: number | null;
   Prompt: string;
+  image_prompt: string;
   has_deepseek_key: boolean;
   can_edit: boolean;
+};
+
+export type ProductImageSource = "generated" | "uploaded";
+
+export type ProductImage = {
+  id: number;
+  product: number;
+  image: string;
+  source: ProductImageSource;
+  is_primary: boolean;
+  created_at: string;
 };
 
 export type Product = {
@@ -125,6 +139,7 @@ export type Product = {
   group_id: string;
   created_at?: string;
   can_edit: boolean;
+  images: ProductImage[];
 };
 
 export type PromptTemplate = {
@@ -144,6 +159,7 @@ export function createIntegration(payload: {
   name: string;
   api_url: string;
   model: string;
+  image_model?: string;
   api_key?: string;
   is_platform_default?: boolean;
   is_active?: boolean;
@@ -160,6 +176,7 @@ export function updateIntegration(
     name?: string;
     api_url?: string;
     model?: string;
+    image_model?: string;
     api_key?: string;
     is_platform_default?: boolean;
     is_active?: boolean;
@@ -227,8 +244,10 @@ export function createProfile(payload: {
   integration: number;
   key_mode?: ProfileKeyMode;
   model?: string;
+  image_model?: string;
   DeepSeekApiKey?: string;
   Prompt?: string;
+  image_prompt?: string;
 }) {
   return request<Profile>("/api/profiles/", {
     method: "POST",
@@ -243,8 +262,10 @@ export function updateProfile(
     integration?: number;
     key_mode?: ProfileKeyMode;
     model?: string;
+    image_model?: string;
     DeepSeekApiKey?: string;
     Prompt?: string;
+    image_prompt?: string;
   },
 ) {
   return request<Profile>(`/api/profiles/${id}/`, {
@@ -314,17 +335,25 @@ export function importProductsFromCsv(profileId: number, file: File) {
   return request<ProductCsvImportResult>("/api/products/import/", { method: "POST", body }, false);
 }
 
-export async function exportProductsToCsv(profileId: number, ids?: number[]) {
+export async function exportProductsToCsv(profileId: number, ids?: number[], fields?: string[]) {
   const token = getToken();
   const headers = new Headers({ "Content-Type": "application/json" });
   if (token) {
     headers.set("Authorization", `Token ${token}`);
   }
 
+  const payload: Record<string, unknown> = { profile: profileId };
+  if (ids?.length) {
+    payload.ids = ids;
+  }
+  if (fields?.length) {
+    payload.fields = fields;
+  }
+
   const response = await fetch("/api/products/export/", {
     method: "POST",
     headers,
-    body: JSON.stringify(ids?.length ? { profile: profileId, ids } : { profile: profileId }),
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     throw new Error(await readError(response));
@@ -356,6 +385,30 @@ export function generateProduct(id: number, prompt?: string) {
   });
 }
 
+export function generateProductImage(id: number, prompt?: string) {
+  return request<ProductImage>(`/api/products/${id}/generate-image/`, {
+    method: "POST",
+    body: JSON.stringify(prompt?.trim() ? { prompt: prompt.trim() } : {}),
+  });
+}
+
+export function uploadProductImage(id: number, file: File) {
+  const body = new FormData();
+  body.append("image", file);
+  return request<ProductImage>(`/api/products/${id}/images/`, { method: "POST", body }, false);
+}
+
+export function deleteProductImage(imageId: number) {
+  return request<void>(`/api/product-images/${imageId}/`, { method: "DELETE" });
+}
+
+export function setPrimaryProductImage(imageId: number) {
+  return request<ProductImage>(`/api/product-images/${imageId}/set-primary/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export type KeyPolicy = "hybrid" | "platform_key" | "byok";
 
 export function allowedKeyModes(policy: KeyPolicy | null | undefined): ProfileKeyMode[] {
@@ -377,6 +430,7 @@ export type Tariff = {
   number_of_products: number;
   number_of_profiles: number;
   number_of_generations: number;
+  number_of_image_generations: number;
   is_active: boolean;
 };
 
@@ -389,9 +443,11 @@ export type UserSubscription = {
   product_limit: number;
   profile_limit: number;
   generation_limit: number;
+  image_generation_limit: number;
   product_usage: number;
   profile_usage: number;
   generation_usage: number;
+  image_generation_usage: number;
   start_date: string;
   end_date: string | null;
   is_active: boolean;
@@ -409,6 +465,7 @@ export function createTariff(payload: {
   number_of_products: number;
   number_of_profiles: number;
   number_of_generations: number;
+  number_of_image_generations?: number;
   is_active?: boolean;
 }) {
   return request<Tariff>("/api/tariffs/", {

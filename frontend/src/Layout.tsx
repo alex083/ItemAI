@@ -1,5 +1,5 @@
-import { Button } from "@heroui/react";
-import { NavLink, Navigate, Outlet } from "react-router-dom";
+import { Button, Toast } from "@heroui/react";
+import { NavLink, Outlet } from "react-router-dom";
 import { cn } from "cn";
 
 import { useAuth } from "./auth";
@@ -23,11 +23,7 @@ function NavItem({ to, children }: { to: string; children: string }) {
 }
 
 export function Layout() {
-  const { loggedIn, logout, user } = useAuth();
-
-  if (!loggedIn) {
-    return <Navigate to="/login" replace />;
-  }
+  const { logout, user } = useAuth();
 
   return (
     <div className="app-shell min-h-svh">
@@ -56,6 +52,7 @@ export function Layout() {
       <main className="mx-auto max-w-6xl px-5 py-10 md:px-6 md:py-14">
         <Outlet />
       </main>
+      <Toast.Provider placement="top end" />
     </div>
   );
 }

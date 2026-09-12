@@ -44,6 +44,16 @@ def require_active_subscription(user) -> UserSubscription:
     return subscription
 
 
+def ensure_image_generation_available(user) -> UserSubscription:
+    """Image generation must be included in the plan (limit > 0), regardless of key mode."""
+    subscription = require_active_subscription(user)
+    if subscription.image_generation_limit <= 0:
+        raise ValidationError(
+            {"detail": "Your plan does not include image generation. Upgrade to a plan with image generation."}
+        )
+    return subscription
+
+
 def ensure_key_mode_allowed(user, key_mode: str) -> UserSubscription:
     subscription = require_active_subscription(user)
     if not key_mode_allowed(subscription.keypolicy, key_mode):
@@ -71,9 +81,11 @@ def apply_tariff_purchase(user, tariff: Tariff) -> UserSubscription:
             product_limit=tariff.number_of_products,
             profile_limit=tariff.number_of_profiles,
             generation_limit=tariff.number_of_generations,
+            image_generation_limit=tariff.number_of_image_generations,
             product_usage=0,
             profile_usage=0,
             generation_usage=0,
+            image_generation_usage=0,
             is_active=True,
         )
 
@@ -82,6 +94,7 @@ def apply_tariff_purchase(user, tariff: Tariff) -> UserSubscription:
     subscription.product_limit = F("product_limit") + tariff.number_of_products
     subscription.profile_limit = F("profile_limit") + tariff.number_of_profiles
     subscription.generation_limit = F("generation_limit") + tariff.number_of_generations
+    subscription.image_generation_limit = F("image_generation_limit") + tariff.number_of_image_generations
     subscription.is_active = True
     subscription.save(
         update_fields=[
@@ -90,6 +103,7 @@ def apply_tariff_purchase(user, tariff: Tariff) -> UserSubscription:
             "product_limit",
             "profile_limit",
             "generation_limit",
+            "image_generation_limit",
             "is_active",
         ]
     )
@@ -140,5 +154,22 @@ def consume_generation_slot(user) -> UserSubscription:
         raise ValidationError({"detail": "Generation limit reached. Buy more capacity or upgrade."})
     subscription.generation_usage = F("generation_usage") + 1
     subscription.save(update_fields=["generation_usage"])
+    subscription.refresh_from_db()
+    return subscription
+
+
+@transaction.atomic
+def consume_image_generation_slot(user) -> UserSubscription:
+    subscription = (
+        user.subscriptions.select_for_update().filter(is_active=True).order_by("-start_date").first()
+    )
+    if subscription is None:
+        raise ValidationError({"detail": "Choose a tariff first."})
+    if subscription.image_generation_limit <= 0:
+        raise ValidationError({"detail": "Your plan does not include image generation."})
+    if subscription.image_generation_usage >= subscription.image_generation_limit:
+        raise ValidationError({"detail": "Image generation limit reached. Buy more capacity or upgrade."})
+    subscription.image_generation_usage = F("image_generation_usage") + 1
+    subscription.save(update_fields=["image_generation_usage"])
     subscription.refresh_from_db()
     return subscription

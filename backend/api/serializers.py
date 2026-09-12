@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
-from .models import Integration, Product, Profile, PromptTemplate, User, Tariff, UserSubscription
+from .csv_import import EXPORT_FIELDS
+from .models import Integration, Product, ProductImage, Profile, PromptTemplate, User, Tariff, UserSubscription
 
 
 class LoginSerializer(serializers.Serializer):
@@ -43,6 +44,7 @@ class IntegrationSerializer(serializers.ModelSerializer):
             "name",
             "api_url",
             "model",
+            "image_model",
             "api_key",
             "has_api_key",
             "is_platform_default",
@@ -52,6 +54,7 @@ class IntegrationSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "api_key": {"write_only": True, "required": False, "allow_blank": True},
             "model": {"required": False, "allow_blank": True},
+            "image_model": {"required": False, "allow_blank": True},
         }
 
     def get_has_api_key(self, obj: Integration) -> bool:
@@ -95,17 +98,21 @@ class ProfileSerializer(serializers.ModelSerializer):
             "integration",
             "key_mode",
             "model",
+            "image_model",
             "DeepSeekApiKey",
             "prompt_template",
             "Prompt",
+            "image_prompt",
             "has_deepseek_key",
             "can_edit",
         )
         read_only_fields = ("id", "user", "has_deepseek_key", "can_edit")
         extra_kwargs = {
             "model": {"required": False, "allow_blank": True},
+            "image_model": {"required": False, "allow_blank": True},
             "DeepSeekApiKey": {"write_only": True, "required": False, "allow_blank": True},
             "key_mode": {"required": False},
+            "image_prompt": {"required": False, "allow_blank": True},
         }
 
     def get_has_deepseek_key(self, obj: Profile) -> bool:
@@ -165,8 +172,25 @@ class ProfileSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
+class ProductImageSerializer(serializers.ModelSerializer):
+    # Plain relative URL (MEDIA_URL + path), not an absolute URI: the frontend dev server
+    # proxies /media/ to the backend container, and an absolute "http://backend:8000/..."
+    # URL (which DRF's ImageField would build from the proxied Host header) is not
+    # resolvable from the browser.
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductImage
+        fields = ("id", "product", "image", "source", "is_primary", "created_at")
+        read_only_fields = ("id", "product", "source", "created_at")
+
+    def get_image(self, obj: ProductImage) -> str | None:
+        return obj.image.url if obj.image else None
+
+
 class ProductSerializer(serializers.ModelSerializer):
     can_edit = serializers.SerializerMethodField()
+    images = ProductImageSerializer(many=True, read_only=True)
 
     class Meta:
         model = Product
@@ -188,8 +212,9 @@ class ProductSerializer(serializers.ModelSerializer):
             "group_id",
             "created_at",
             "can_edit",
+            "images",
         )
-        read_only_fields = ("id", "created_at", "can_edit")
+        read_only_fields = ("id", "created_at", "can_edit", "images")
 
     def get_can_edit(self, obj: Product) -> bool:
         return obj.profile.user_id is not None and obj.profile.user_id == _request_user_id(self)
@@ -215,6 +240,10 @@ class ProductSerializer(serializers.ModelSerializer):
 
 
 class GenerateProductSerializer(serializers.Serializer):
+    prompt = serializers.CharField(required=False, allow_blank=True)
+
+
+class GenerateProductImageSerializer(serializers.Serializer):
     prompt = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -245,6 +274,23 @@ class ProductCsvExportSerializer(serializers.Serializer):
         required=False,
         allow_empty=False,
     )
+    fields = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=False,
+    )
+
+    def validate_fields(self, fields: list[str]) -> list[str]:
+        requested = [f for f in fields if f]
+        invalid = [f for f in requested if f not in EXPORT_FIELDS]
+        if invalid:
+            raise serializers.ValidationError(
+                f"Invalid export field(s): {', '.join(invalid)}. "
+                f"Available: {', '.join(EXPORT_FIELDS)}."
+            )
+        if not requested:
+            raise serializers.ValidationError("At least one field is required.")
+        return requested
 
     def validate_profile(self, profile: Profile) -> Profile:
         request = self.context["request"]
@@ -264,6 +310,7 @@ class TariffSerializer(serializers.ModelSerializer):
             "number_of_products",
             "number_of_profiles",
             "number_of_generations",
+            "number_of_image_generations",
             "is_active",
         )
         read_only_fields = ("id",)
@@ -295,9 +342,11 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
             "product_limit",
             "profile_limit",
             "generation_limit",
+            "image_generation_limit",
             "product_usage",
             "profile_usage",
             "generation_usage",
+            "image_generation_usage",
             "start_date",
             "end_date",
             "is_active",

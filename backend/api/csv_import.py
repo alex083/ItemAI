@@ -5,6 +5,8 @@ import io
 import json
 import re
 
+from django.conf import settings
+
 MAX_CSV_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 5_000
 CHAR_LIMITS = {
@@ -186,10 +188,27 @@ EXPORT_FIELDS = (
     "bullet_points",
     "google_product_category",
     "google_product_category_path",
+    "image_url",
+    "image_urls",
 )
 
 
 def _export_value(product, field: str) -> str:
+    if field in ("image_url", "image_urls"):
+        images_qs = getattr(product, "images", None)
+        images = list(images_qs.all()) if images_qs is not None else []
+        urls: list[str] = []
+        for img in images:
+            if img.image:
+                url = img.image.url
+                if url and not url.startswith("http"):
+                    url = f"{settings.MEDIA_URL.rstrip('/')}{url}"
+                urls.append(url)
+        if field == "image_url":
+            primary = next((url for img, url in zip(images, urls) if img.is_primary), None)
+            return primary or (urls[0] if urls else "")
+        return " | ".join(urls)
+
     value = getattr(product, field, "")
     if field == "bullet_points":
         if isinstance(value, list):
@@ -198,11 +217,12 @@ def _export_value(product, field: str) -> str:
     return "" if value is None else str(value)
 
 
-def build_product_csv(products) -> bytes:
+def build_product_csv(products, fields: list[str] | None = None) -> bytes:
+    fieldnames = fields if fields else list(EXPORT_FIELDS)
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=EXPORT_FIELDS, lineterminator="\n")
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
     writer.writeheader()
     for product in products:
-        writer.writerow({field: _export_value(product, field) for field in EXPORT_FIELDS})
+        writer.writerow({field: _export_value(product, field) for field in fieldnames})
     # UTF-8 BOM so Excel opens Ukrainian/Latin characters correctly
     return ("\ufeff" + buffer.getvalue()).encode("utf-8")

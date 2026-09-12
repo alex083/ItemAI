@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth import authenticate
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
@@ -14,20 +15,24 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.mixins import DestroyModelMixin
 from rest_framework.views import APIView
-from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
+from rest_framework.viewsets import GenericViewSet, ModelViewSet, ReadOnlyModelViewSet
 
 from .csv_import import CsvImportError, build_product_csv, parse_product_csv
 from .deepseek import DeepSeekError, generate_product_copy
-from .models import Integration, Product, Profile, PromptTemplate, Tariff, UserSubscription
+from .image_gen import ImageGenerationError, build_product_image_prompt, generate_product_image
+from .models import Integration, Product, ProductImage, Profile, PromptTemplate, Tariff, UserSubscription
 from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly, is_admin
 from .providers import ProviderError, fetch_available_models
 from .serializers import (
+    GenerateProductImageSerializer,
     GenerateProductSerializer,
     IntegrationSerializer,
     LoginSerializer,
     ProductCsvExportSerializer,
     ProductCsvImportSerializer,
+    ProductImageSerializer,
     ProductSerializer,
     ProfileSerializer,
     PromptTemplateSerializer,
@@ -40,8 +45,10 @@ from .serializers import (
 from .subscriptions import (
     apply_tariff_purchase,
     consume_generation_slot,
+    consume_image_generation_slot,
     consume_product_slot,
     consume_profile_slot,
+    ensure_image_generation_available,
     ensure_key_mode_allowed,
     get_active_subscription,
 )
@@ -231,8 +238,14 @@ class ProductViewSet(ModelViewSet):
         serializer.is_valid(raise_exception=True)
         profile = serializer.validated_data["profile"]
         ids = serializer.validated_data.get("ids")
+        fields = serializer.validated_data.get("fields")
 
-        queryset = self.get_queryset().filter(profile=profile).order_by("id")
+        queryset = (
+            self.get_queryset()
+            .filter(profile=profile)
+            .prefetch_related("images")
+            .order_by("id")
+        )
         if ids is not None:
             queryset = queryset.filter(id__in=ids)
             found = set(queryset.values_list("id", flat=True))
@@ -247,7 +260,10 @@ class ProductViewSet(ModelViewSet):
         if not products:
             return Response({"detail": "No products to export."}, status=status.HTTP_400_BAD_REQUEST)
 
-        response = HttpResponse(build_product_csv(products), content_type="text/csv; charset=utf-8")
+        response = HttpResponse(
+            build_product_csv(products, fields),
+            content_type="text/csv; charset=utf-8",
+        )
         response["Content-Disposition"] = f'attachment; filename="products-profile-{profile.id}.csv"'
         return response
 
@@ -326,14 +342,159 @@ class ProductViewSet(ModelViewSet):
         )
         return Response(self.get_serializer(product).data)
 
+    @action(detail=True, methods=["post"], url_path="generate-image")
+    def generate_image(self, request: Request, pk=None) -> Response:
+        product = self.get_object()
+        payload = GenerateProductImageSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        try:
+            ensure_key_mode_allowed(request.user, product.profile.key_mode)
+            ensure_image_generation_available(request.user)
+            if product.profile.key_mode == Profile.KeyMode.PLATFORM:
+                subscription = get_active_subscription(request.user)
+                if subscription is None:
+                    raise ValidationError({"detail": "Choose a tariff first."})
+                if subscription.image_generation_usage >= subscription.image_generation_limit:
+                    raise ValidationError(
+                        {"detail": "Image generation limit reached. Buy more capacity or upgrade."}
+                    )
+            image_model = product.profile.get_image_model()
+            if not image_model:
+                raise ValidationError(
+                    {"detail": "Set an image model on the profile or integration first."}
+                )
+
+            reference = (
+                product.images.filter(is_primary=True).first()
+                or product.images.order_by("created_at").first()
+            )
+            if reference is None or not reference.image:
+                raise ValidationError(
+                    {
+                        "detail": (
+                            "Upload a real product photo first. "
+                            "Generate uses that photo as a reference so the result matches your product."
+                        )
+                    }
+                )
+            try:
+                reference_bytes = reference.image.read()
+            finally:
+                reference.image.close()
+            if not reference_bytes:
+                raise ValidationError({"detail": "Could not read the reference product photo."})
+
+            custom_prompt = (payload.validated_data.get("prompt") or "").strip()
+            prompt = build_product_image_prompt(
+                title=product.title,
+                image_prompt=product.profile.get_image_prompt(),
+                custom_prompt=custom_prompt,
+                description=product.description,
+                short_description=product.short_description,
+                product_type=product.product_type,
+                tags=product.tags,
+                has_reference=True,
+            )
+            integration = product.profile.integration
+            image_bytes = generate_product_image(
+                api_key=product.profile.resolve_api_key(),
+                title=product.title,
+                prompt=prompt,
+                base_url=integration.api_url if integration else None,
+                model=image_model,
+                reference_image=reference_bytes,
+            )
+            if product.profile.key_mode == Profile.KeyMode.PLATFORM:
+                consume_image_generation_slot(request.user)
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ImageGenerationError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except APIError as exc:
+            if getattr(exc, "status_code", None) == 402:
+                return Response(
+                    {
+                        "detail": (
+                            "The selected API account does not have enough funds. "
+                            "Top up the balance and try again."
+                        )
+                    },
+                    status=status.HTTP_402_PAYMENT_REQUIRED,
+                )
+            return Response(
+                {"detail": f"Image API request failed: {exc}"},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        image = ProductImage.objects.create(product=product, source=ProductImage.Source.GENERATED)
+        image.image.save(f"{uuid.uuid4().hex}.png", ContentFile(image_bytes), save=True)
+        if not product.images.filter(is_primary=True).exclude(pk=image.pk).exists():
+            image.is_primary = True
+            image.save(update_fields=["is_primary"])
+        return Response(
+            ProductImageSerializer(image, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="images",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_image(self, request: Request, pk=None) -> Response:
+        product = self.get_object()
+        uploaded = request.FILES.get("image")
+        if not uploaded:
+            return Response({"detail": "Attach an image file."}, status=status.HTTP_400_BAD_REQUEST)
+        if uploaded.size > 8 * 1024 * 1024:
+            return Response({"detail": "Image is too large (max 8 MB)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        image = ProductImage.objects.create(
+            product=product, image=uploaded, source=ProductImage.Source.UPLOADED
+        )
+        if not product.images.filter(is_primary=True).exclude(pk=image.pk).exists():
+            image.is_primary = True
+            image.save(update_fields=["is_primary"])
+        return Response(
+            ProductImageSerializer(image, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ProductImageViewSet(DestroyModelMixin, GenericViewSet):
+    serializer_class = ProductImageSerializer
+    permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
+
+    def get_queryset(self):
+        return ProductImage.objects.select_related("product", "product__profile").filter(
+            Q(product__profile__user=self.request.user) | Q(product__profile__user__isnull=True)
+        )
+
+    @action(detail=True, methods=["post"], url_path="set-primary")
+    def set_primary(self, request: Request, pk=None) -> Response:
+        image = self.get_object()
+        ProductImage.objects.filter(product_id=image.product_id).update(is_primary=False)
+        image.is_primary = True
+        image.save(update_fields=["is_primary"])
+        return Response(self.get_serializer(image).data)
+
 
 class TariffViewSet(ModelViewSet):
     serializer_class = TariffSerializer
     permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
 
+    def get_permissions(self):
+        if self.action in ("list", "retrieve"):
+            return [AllowAny()]
+        return [IsAuthenticated(), IsAdminOrReadOnly()]
+
     def get_queryset(self):
         queryset = Tariff.objects.all()
-        if not is_admin(self.request.user):
+        user = self.request.user
+        if not (user and user.is_authenticated and is_admin(user)):
             queryset = queryset.filter(is_active=True)
         return queryset
 

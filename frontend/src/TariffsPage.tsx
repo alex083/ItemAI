@@ -37,6 +37,7 @@ export function TariffsPage() {
   const [products, setProducts] = useState("100");
   const [profiles, setProfiles] = useState("3");
   const [generations, setGenerations] = useState("100");
+  const [imageGenerations, setImageGenerations] = useState("0");
 
   async function refresh() {
     const nextTariffs = await listTariffs();
@@ -80,7 +81,8 @@ export function TariffsPage() {
         keypolicy,
         number_of_products: Number(products),
         number_of_profiles: Number(profiles),
-        number_of_generations: Number(generations),
+        number_of_generations: keypolicy === "byok" ? 0 : Number(generations),
+        number_of_image_generations: Number(imageGenerations) || 0,
         is_active: true,
       });
       setShowForm(false);
@@ -128,13 +130,30 @@ export function TariffsPage() {
               <Chip size="sm" variant="soft">
                 Products {subscription.product_usage}/{subscription.product_limit}
               </Chip>
-                    <Chip size="sm" variant="soft" color="accent">
-                Generations {subscription.generation_usage}/{subscription.generation_limit}
-              </Chip>
+              {subscription.keypolicy !== "byok" ? (
+                <Chip size="sm" variant="soft" color="accent">
+                  Generations {subscription.generation_usage}/{subscription.generation_limit}
+                </Chip>
+              ) : null}
+              {subscription.image_generation_limit > 0 ? (
+                <Chip size="sm" variant="soft" color="accent">
+                  Images {subscription.image_generation_usage}/{subscription.image_generation_limit}
+                </Chip>
+              ) : (
+                <Chip size="sm" variant="soft">
+                  Image generation not included
+                </Chip>
+              )}
             </div>
-            <p className="mt-3 text-sm text-muted">
-              Generation credits are used only with the platform key. Own-key generates are free of this limit.
-            </p>
+            {subscription.keypolicy !== "byok" ? (
+              <p className="mt-3 text-sm text-muted">
+                Generation credits are used only with the platform key. Own-key generates are free of this limit.
+              </p>
+            ) : (
+              <p className="mt-3 text-sm text-muted">
+                Own-key plan: generates use your API key and do not consume generation credits.
+              </p>
+            )}
           </Card.Content>
         </Card>
       ) : (
@@ -205,16 +224,28 @@ export function TariffsPage() {
                     required
                   />
                 </div>
+                {keypolicy !== "byok" ? (
+                  <div className="space-y-2.5">
+                    <Label htmlFor="tariff-gens">Generations</Label>
+                    <Input
+                      id="tariff-gens"
+                      fullWidth
+                      value={generations}
+                      onChange={(e) => setGenerations(e.target.value)}
+                      required
+                    />
+                    <FieldHint>Counted only when using the platform key.</FieldHint>
+                  </div>
+                ) : null}
                 <div className="space-y-2.5">
-                  <Label htmlFor="tariff-gens">Generations</Label>
+                  <Label htmlFor="tariff-image-gens">Image generations</Label>
                   <Input
-                    id="tariff-gens"
+                    id="tariff-image-gens"
                     fullWidth
-                    value={generations}
-                    onChange={(e) => setGenerations(e.target.value)}
-                    required
+                    value={imageGenerations}
+                    onChange={(e) => setImageGenerations(e.target.value)}
                   />
-                  <FieldHint>Counted only when using the platform key.</FieldHint>
+                  <FieldHint>0 disables image generation for this plan. Own-key generates stay unlimited.</FieldHint>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -259,9 +290,16 @@ export function TariffsPage() {
                     <Chip size="sm" variant="soft">
                       {tariff.number_of_products} products
                     </Chip>
-                    <Chip size="sm" variant="soft">
-                      {tariff.number_of_generations} generations
-                    </Chip>
+                    {tariff.keypolicy !== "byok" ? (
+                      <Chip size="sm" variant="soft">
+                        {tariff.number_of_generations} generations
+                      </Chip>
+                    ) : null}
+                    {tariff.number_of_image_generations > 0 ? (
+                      <Chip size="sm" variant="soft" color="accent">
+                        {tariff.number_of_image_generations} images
+                      </Chip>
+                    ) : null}
                   </div>
                 </div>
                 <Button size="sm" className="shrink-0" isDisabled={busy} onPress={() => void onSubscribe(tariff.id)}>
