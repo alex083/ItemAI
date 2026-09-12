@@ -1,12 +1,16 @@
 import { IconLoader2 } from "@tabler/icons-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Accordion, Button, Card, Input, Label, TextArea } from "@heroui/react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { cn } from "cn";
 
 import {
+  allowedKeyModes,
   createProduct,
   deleteProduct,
   exportProductsToCsv,
   generateProduct,
+  getMySubscription,
   getProfile,
   importProductsFromCsv,
   listAvailableModels,
@@ -14,27 +18,24 @@ import {
   listProducts,
   updateProfile,
   type Integration,
+  type KeyPolicy,
   type Product,
   type Profile,
+  type ProfileKeyMode,
   type ProviderModel,
 } from "./api";
 import { FieldHint } from "@/components/field-hint";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "cn";
+import { NativeSelect } from "@/components/native-select";
+import { StatusBanner } from "@/components/status-banner";
 
 export function ProfileDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const profileId = Number(id);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [keyPolicy, setKeyPolicy] = useState<KeyPolicy | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showImportForm, setShowImportForm] = useState(false);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -75,7 +76,16 @@ export function ProfileDetailPage() {
     setIntegrations(nextIntegrations);
     setSelectedModel(nextProfile.model || "");
     setPrompt(nextProfile.Prompt);
-    if (nextProfile.can_edit && nextProfile.integration && nextProfile.has_deepseek_key) {
+    try {
+      setKeyPolicy((await getMySubscription()).keypolicy);
+    } catch {
+      setKeyPolicy(null);
+    }
+    if (
+      nextProfile.can_edit &&
+      nextProfile.integration &&
+      (nextProfile.key_mode === "platform" || nextProfile.has_deepseek_key)
+    ) {
       void loadModels(nextProfile.integration, nextProfile.model);
     }
     setProducts(allProducts.filter((item) => item.profile === profileId));
@@ -103,6 +113,19 @@ export function ProfileDetailPage() {
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not save prompt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onUpdateKeyMode(nextMode: ProfileKeyMode) {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateProfile(profileId, { key_mode: nextMode });
+      await refresh();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not update key mode");
     } finally {
       setBusy(false);
     }
@@ -281,30 +304,35 @@ export function ProfileDetailPage() {
 
   if (!profile) {
     return error ? (
-      <Alert variant="destructive">
-        <AlertDescription>{error}</AlertDescription>
-      </Alert>
+      <StatusBanner>{error}</StatusBanner>
     ) : (
-      <p className="text-sm text-muted-foreground">Loading…</p>
+      <p className="text-sm text-muted">Loading…</p>
     );
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-start justify-between gap-3">
+    <div className="page-stack">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <Link to="/profiles" className="text-sm text-primary underline-offset-4 hover:underline">
+          <Link
+            to="/profiles"
+            className="text-sm font-medium text-[var(--accent)] underline-offset-4 hover:underline"
+          >
             ← Profiles
           </Link>
-          <h1 className="mt-2 font-heading text-2xl font-medium tracking-tight">{profile.title}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <h1 className="mt-3 font-display text-3xl font-semibold md:text-4xl">{profile.title}</h1>
+          <p className="mt-2 text-[0.95rem] text-muted">
             {profile.can_edit
               ? [
-                  integrations.find((item) => item.id === profile.integration)?.name,
-                  profile.has_deepseek_key ? "API key saved." : "Add a key in settings.",
-                ]
-                  .filter(Boolean)
-                  .join(" ")
+                integrations.find((item) => item.id === profile.integration)?.name,
+                profile.key_mode === "platform"
+                  ? "Using platform key."
+                  : profile.has_deepseek_key
+                    ? "Own API key saved."
+                    : "Add your API key in settings.",
+              ]
+                .filter(Boolean)
+                .join(" ")
               : "Shared profile. View only."}
           </p>
         </div>
@@ -312,53 +340,56 @@ export function ProfileDetailPage() {
           <div className="flex shrink-0 flex-wrap gap-2">
             <Button
               variant="outline"
-              onClick={() => {
+              onPress={() => {
                 setShowImportForm(true);
                 setError(null);
               }}
             >
               Import CSV
             </Button>
-            <Button onClick={() => setShowCreateForm(true)}>Create product</Button>
+            <Button onPress={() => setShowCreateForm(true)}>Create product</Button>
           </div>
         ) : null}
       </div>
-      {error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
-      {importMessage ? (
-        <Alert>
-          <AlertDescription>{importMessage}</AlertDescription>
-        </Alert>
-      ) : null}
+      {error ? <StatusBanner>{error}</StatusBanner> : null}
+      {importMessage ? <StatusBanner status="success">{importMessage}</StatusBanner> : null}
 
       {profile.can_edit && showCreateForm ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>New product</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-4" onSubmit={onCreate}>
-              <div className="space-y-2">
+        <Card className="glass-panel fade-in rounded-3xl p-1">
+          <Card.Header className="px-6 pt-6">
+            <Card.Title>New product</Card.Title>
+          </Card.Header>
+          <Card.Content className="px-6 pb-6">
+            <form className="flex flex-col gap-5" onSubmit={onCreate}>
+              <div className="space-y-2.5">
                 <Label htmlFor="title">Title</Label>
-                <Input id="title" value={title} onChange={(event) => setTitle(event.target.value)} required />
+                <Input
+                  id="title"
+                  fullWidth
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  required
+                />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <Label htmlFor="external">Store ID</Label>
-                <Input id="external" value={externalId} onChange={(event) => setExternalId(event.target.value)} />
+                <Input
+                  id="external"
+                  fullWidth
+                  value={externalId}
+                  onChange={(event) => setExternalId(event.target.value)}
+                />
                 <FieldHint>Used later to export the product back to the store</FieldHint>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" isDisabled={busy} isPending={busy}>
                   Add product
                 </Button>
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={busy}
-                  onClick={() => {
+                  isDisabled={busy}
+                  onPress={() => {
                     resetCreateForm();
                     setError(null);
                   }}
@@ -367,18 +398,18 @@ export function ProfileDetailPage() {
                 </Button>
               </div>
             </form>
-          </CardContent>
+          </Card.Content>
         </Card>
       ) : null}
 
       {profile.can_edit && showImportForm ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Import products from CSV</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-4" onSubmit={onImportCsv}>
-              <div className="space-y-2">
+        <Card className="glass-panel fade-in rounded-3xl p-1">
+          <Card.Header className="px-6 pt-6">
+            <Card.Title>Import products from CSV</Card.Title>
+          </Card.Header>
+          <Card.Content className="px-6 pb-6">
+            <form className="flex flex-col gap-5" onSubmit={onImportCsv}>
+              <div className="space-y-2.5">
                 <Label htmlFor="csv-file">CSV file</Label>
                 <input
                   id="csv-file"
@@ -392,29 +423,31 @@ export function ProfileDetailPage() {
                   <Button
                     variant="outline"
                     type="button"
-                    disabled={busy}
-                    onClick={() => csvInputRef.current?.click()}
+                    isDisabled={busy}
+                    onPress={() => csvInputRef.current?.click()}
                   >
                     Choose file
                   </Button>
-                  <span className={cn("truncate text-sm", csvFile ? "text-foreground" : "text-muted-foreground")}>
+                  <span className={cn("truncate text-sm", csvFile ? "text-foreground" : "text-muted")}>
                     {csvFile ? csvFile.name : "No file selected"}
                   </span>
                 </div>
                 <FieldHint>
-                  Required column: title (or name). Optional: external_id, barcode, group_id, description,
-                  google_product_category. Comma or semicolon separators are supported.
+                  Required column: title (or name). Optional: external_id, barcode, group_id, product_type, tags,
+                  short_description, description, meta_title, meta_description, bullet_points,
+                  google_product_category, google_product_category_path. Comma or semicolon separators are
+                  supported. Bullet points can use | separators.
                 </FieldHint>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={busy || !csvFile}>
+                <Button type="submit" isDisabled={busy || !csvFile} isPending={busy}>
                   Import products
                 </Button>
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={busy}
-                  onClick={() => {
+                  isDisabled={busy}
+                  onPress={() => {
                     resetImportForm();
                     setError(null);
                   }}
@@ -423,13 +456,13 @@ export function ProfileDetailPage() {
                 </Button>
               </div>
             </form>
-          </CardContent>
+          </Card.Content>
         </Card>
       ) : null}
 
       <div className="flex flex-col gap-3">
         {products.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted">
             {profile.can_edit
               ? "This profile has no products yet. Create one or import a CSV."
               : "This profile has no products yet."}
@@ -437,7 +470,7 @@ export function ProfileDetailPage() {
         ) : (
           <>
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-muted">
                 <input
                   type="checkbox"
                   className="size-4 accent-foreground"
@@ -450,20 +483,20 @@ export function ProfileDetailPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={busy || selectedIds.length === 0}
-                  onClick={() => void onExport(selectedIds)}
+                  isDisabled={busy || selectedIds.length === 0}
+                  onPress={() => void onExport(selectedIds)}
                 >
                   Export selected
                 </Button>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => void onExport()}>
+                <Button variant="outline" size="sm" isDisabled={busy} onPress={() => void onExport()}>
                   Export all
                 </Button>
               </div>
             </div>
             {products.map((product) => (
-              <Card key={product.id} size="sm">
-                <CardContent className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
+              <Card key={product.id} className="lift-card glass-panel fade-in rounded-3xl p-1">
+                <Card.Content className="list-row flex-wrap gap-4 px-6 py-5">
+                  <div className="flex min-w-0 flex-1 items-center gap-3.5">
                     <input
                       type="checkbox"
                       className="size-4 shrink-0 accent-foreground"
@@ -472,33 +505,42 @@ export function ProfileDetailPage() {
                       aria-label={`Select ${product.title}`}
                     />
                     <Link to={`/profiles/${profileId}/products/${product.id}`} className="min-w-0">
-                      <h2 className="font-medium">{product.title}</h2>
+                      <h2 className="truncate font-display text-base font-semibold">{product.title}</h2>
                     </Link>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Link
-                      className={cn(buttonVariants({ size: "sm" }))}
-                      to={`/profiles/${profileId}/products/${product.id}`}
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      onPress={() => navigate(`/profiles/${profileId}/products/${product.id}`)}
                     >
                       Open
-                    </Link>
+                    </Button>
                     {profile.can_edit ? (
                       <>
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={generatingId === product.id}
-                          onClick={() => void onGenerate(product.id)}
+                          isDisabled={generatingId === product.id}
+                          onPress={() => void onGenerate(product.id)}
                         >
-                          {generatingId === product.id ? <IconLoader2 className="animate-spin" /> : "Generate"}
+                          {generatingId === product.id ? (
+                            <IconLoader2 className="animate-spin" />
+                          ) : (
+                            "Generate"
+                          )}
                         </Button>
-                        <Button variant="outline" size="sm" disabled={busy} onClick={() => void onDelete(product.id)}>
+                        <Button
+                          variant="danger-soft"
+                          size="sm"
+                          isDisabled={busy}
+                          onPress={() => void onDelete(product.id)}
+                        >
                           Delete
                         </Button>
                       </>
                     ) : null}
                   </div>
-                </CardContent>
+                </Card.Content>
               </Card>
             ))}
           </>
@@ -506,121 +548,159 @@ export function ProfileDetailPage() {
       </div>
 
       {!profile.can_edit && profile.Prompt ? (
-        <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between gap-3">
-              <CardTitle>Prompt</CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  void navigator.clipboard.writeText(profile.Prompt);
-                }}
-              >
-                Copy
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{profile.Prompt}</p>
-          </CardContent>
+        <Card className="glass-panel fade-in rounded-3xl p-1">
+          <Card.Header className="flex items-start justify-between gap-3 px-6 pt-6">
+            <Card.Title>Prompt</Card.Title>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => {
+                void navigator.clipboard.writeText(profile.Prompt);
+              }}
+            >
+              Copy
+            </Button>
+          </Card.Header>
+          <Card.Content className="px-6 pb-6">
+            <p className="whitespace-pre-wrap text-[0.95rem] leading-7 text-muted">{profile.Prompt}</p>
+          </Card.Content>
         </Card>
       ) : null}
 
       {profile.can_edit ? (
-        <Accordion>
-          <AccordionItem value="settings">
-            <AccordionTrigger>Profile settings</AccordionTrigger>
-            <AccordionContent>
-              <form className="flex flex-col gap-4" onSubmit={onSavePrompt}>
-                <div className="space-y-2">
-                  <Label htmlFor="profile-integration">Integration</Label>
-                  <NativeSelect
-                    id="profile-integration"
-                    value={profile.integration ? String(profile.integration) : ""}
-                    disabled={busy}
-                    onChange={(event) => void onUpdateIntegration(event.target.value)}
-                  >
-                    <option value="" disabled>
-                      Select an integration
-                    </option>
-                    {integrations.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <Label htmlFor="profile-model">Model</Label>
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      type="button"
-                      disabled={loadingModels || busy || !profile.integration}
-                      onClick={() => profile.integration && void loadModels(profile.integration, selectedModel)}
-                    >
-                      {loadingModels ? "Loading…" : "Load models"}
-                    </Button>
-                  </div>
-                  {models.length ? (
+        <Accordion className="w-full">
+          <Accordion.Item>
+            <Accordion.Heading>
+              <Accordion.Trigger>
+                Profile settings
+                <Accordion.Indicator />
+              </Accordion.Trigger>
+            </Accordion.Heading>
+            <Accordion.Panel>
+              <Accordion.Body>
+                <form className="flex flex-col gap-5" onSubmit={onSavePrompt}>
+                  <div className="space-y-2.5">
+                    <Label htmlFor="profile-integration">Integration</Label>
                     <NativeSelect
-                      id="profile-model"
-                      value={selectedModel}
+                      id="profile-integration"
+                      value={profile.integration ? String(profile.integration) : ""}
                       disabled={busy}
-                      onChange={(event) => void onUpdateModel(event.target.value)}
+                      onChange={(event) => void onUpdateIntegration(event.target.value)}
                     >
-                      {models.map((item) => (
+                      <option value="" disabled>
+                        Select an integration
+                      </option>
+                      {integrations.map((item) => (
                         <option key={item.id} value={item.id}>
-                          {item.name === item.id ? item.id : `${item.name} (${item.id})`}
+                          {item.name}
                         </option>
                       ))}
                     </NativeSelect>
+                  </div>
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <Label htmlFor="profile-model">Model</Label>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        isDisabled={loadingModels || busy || !profile.integration}
+                        onPress={() => profile.integration && void loadModels(profile.integration, selectedModel)}
+                      >
+                        {loadingModels ? "Loading…" : "Load models"}
+                      </Button>
+                    </div>
+                    {models.length ? (
+                      <NativeSelect
+                        id="profile-model"
+                        value={selectedModel}
+                        disabled={busy}
+                        onChange={(event) => void onUpdateModel(event.target.value)}
+                      >
+                        {models.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name === item.id ? item.id : `${item.name} (${item.id})`}
+                          </option>
+                        ))}
+                      </NativeSelect>
+                    ) : (
+                      <Input
+                        id="profile-model"
+                        fullWidth
+                        value={selectedModel}
+                        disabled={busy}
+                        onBlur={(event) => {
+                          if (event.target.value.trim() && event.target.value !== profile.model) {
+                            void onUpdateModel(event.target.value.trim());
+                          }
+                        }}
+                        onChange={(event) => setSelectedModel(event.target.value)}
+                        placeholder="Load models or type an id"
+                      />
+                    )}
+                  </div>
+                  <div className="space-y-2.5">
+                    <Label htmlFor="profile-key-mode">API key source</Label>
+                    {allowedKeyModes(keyPolicy).length > 1 ? (
+                      <NativeSelect
+                        id="profile-key-mode"
+                        value={profile.key_mode}
+                        disabled={busy}
+                        onChange={(event) => void onUpdateKeyMode(event.target.value as ProfileKeyMode)}
+                      >
+                        {allowedKeyModes(keyPolicy).includes("platform") ? (
+                          <option value="platform">Use platform key (from integration)</option>
+                        ) : null}
+                        {allowedKeyModes(keyPolicy).includes("byok") ? (
+                          <option value="byok">Use my own API key</option>
+                        ) : null}
+                      </NativeSelect>
+                    ) : (
+                      <p className="text-sm text-muted">
+                        {profile.key_mode === "byok"
+                          ? "Your plan requires your own API key."
+                          : "Your plan uses the platform key from the integration."}
+                      </p>
+                    )}
+                  </div>
+                  {profile.key_mode === "byok" ? (
+                    <div className="space-y-2.5">
+                      <Label htmlFor="new-key">New API key</Label>
+                      <Input
+                        id="new-key"
+                        type="password"
+                        fullWidth
+                        placeholder="Paste the key and click outside the field"
+                        disabled={busy}
+                        onBlur={(event) => {
+                          const value = event.target.value;
+                          event.target.value = "";
+                          void onUpdateKey(value);
+                        }}
+                      />
+                    </div>
                   ) : (
-                    <Input
-                      id="profile-model"
-                      value={selectedModel}
-                      disabled={busy}
-                      onBlur={(event) => {
-                        if (event.target.value.trim() && event.target.value !== profile.model) {
-                          void onUpdateModel(event.target.value.trim());
-                        }
-                      }}
-                      onChange={(event) => setSelectedModel(event.target.value)}
-                      placeholder="Load models or type an id"
-                    />
+                    <p className="text-sm text-muted">
+                      This profile uses the built-in key from the selected integration.
+                    </p>
                   )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="new-key">New API key</Label>
-                  <Input
-                    id="new-key"
-                    type="password"
-                    placeholder="Paste the key and click outside the field"
-                    disabled={busy}
-                    onBlur={(event) => {
-                      const value = event.target.value;
-                      event.target.value = "";
-                      void onUpdateKey(value);
-                    }}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="profile-prompt">Prompt</Label>
-                  <Textarea
-                    id="profile-prompt"
-                    rows={3}
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                  />
-                </div>
-                <Button variant="outline" type="submit" className="w-fit" disabled={busy}>
-                  Save prompt
-                </Button>
-              </form>
-            </AccordionContent>
-          </AccordionItem>
+                  <div className="space-y-2.5">
+                    <Label htmlFor="profile-prompt">Prompt</Label>
+                    <TextArea
+                      id="profile-prompt"
+                      fullWidth
+                      rows={3}
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                    />
+                  </div>
+                  <Button variant="outline" type="submit" className="w-fit" isDisabled={busy} isPending={busy}>
+                    Save prompt
+                  </Button>
+                </form>
+              </Accordion.Body>
+            </Accordion.Panel>
+          </Accordion.Item>
         </Accordion>
       ) : null}
     </div>

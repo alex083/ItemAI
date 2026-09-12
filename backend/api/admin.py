@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Integration, Product, Profile, PromptTemplate, User
+from .models import Integration, Product, Profile, PromptTemplate, Tariff, User, UserSubscription
 
 
 @admin.register(User)
@@ -18,17 +18,60 @@ class PromptTemplateAdmin(admin.ModelAdmin):
 
 @admin.register(Integration)
 class IntegrationAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "model", "api_url", "is_active")
+    list_display = ("id", "name", "model", "api_url", "has_api_key", "is_platform_default", "is_active")
     search_fields = ("name", "model", "api_url")
+    list_filter = ("is_active", "is_platform_default")
+    fields = ("name", "api_url", "model", "api_key", "is_platform_default", "is_active")
+
+    @admin.display(boolean=True, description="Built-in key")
+    def has_api_key(self, obj: Integration) -> bool:
+        return bool(obj.api_key)
 
 
 @admin.register(Profile)
 class ProfileAdmin(admin.ModelAdmin):
-    list_display = ("id", "title", "user", "integration", "prompt_template", "created_at")
+    list_display = ("id", "title", "user", "integration", "key_mode", "prompt_template", "created_at")
     search_fields = ("title",)
+    list_filter = ("key_mode",)
 
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ("id", "title", "profile", "created_at")
+    list_display = ("id", "title", "product_type", "profile", "created_at")
+    search_fields = ("title", "tags", "product_type", "external_id")
+
+
+@admin.register(Tariff)
+class TariffAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "price",
+        "keypolicy",
+        "number_of_products",
+        "number_of_profiles",
+        "number_of_generations",
+        "is_active",
+    )
+    list_filter = ("keypolicy", "is_active")
     search_fields = ("title",)
+
+
+@admin.register(UserSubscription)
+class UserSubscriptionAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "tariff",
+        "keypolicy",
+        "product_usage",
+        "product_limit",
+        "profile_usage",
+        "profile_limit",
+        "generation_usage",
+        "generation_limit",
+        "is_active",
+        "start_date",
+    )
+    list_filter = ("keypolicy", "is_active")
+    search_fields = ("user__username", "tariff__title")

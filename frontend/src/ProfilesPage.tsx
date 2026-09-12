@@ -1,33 +1,42 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { Button, Card, Chip, Input, Label, TextArea } from "@heroui/react";
 import { Link } from "react-router-dom";
 
 import {
   createProfile,
+  defaultKeyMode,
   deleteProfile,
+  getMySubscription,
   listAvailableModels,
   listIntegrations,
   listProfiles,
   type Integration,
+  type KeyPolicy,
+  allowedKeyModes,
   type Profile,
+  type ProfileKeyMode,
   type ProviderModel,
 } from "./api";
 import { FieldHint } from "@/components/field-hint";
+import { NativeSelect } from "@/components/native-select";
 import { PageHeader } from "@/components/page-header";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Textarea } from "@/components/ui/textarea";
+import { StatusBanner } from "@/components/status-banner";
+
+function pickDefaultIntegration(items: Integration[]) {
+  const preferred = items.find((item) => item.is_platform_default && item.has_api_key)
+    || items.find((item) => item.has_api_key)
+    || items[0];
+  return preferred ? String(preferred.id) : "";
+}
 
 export function ProfilesPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [keyPolicy, setKeyPolicy] = useState<KeyPolicy | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [title, setTitle] = useState("");
   const [integrationId, setIntegrationId] = useState("");
+  const [keyMode, setKeyMode] = useState<ProfileKeyMode>("platform");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -36,9 +45,12 @@ export function ProfilesPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const keyModeOptions = allowedKeyModes(keyPolicy);
+
   function resetCreateForm() {
     setTitle("");
-    setIntegrationId(integrations[0] ? String(integrations[0].id) : "");
+    setIntegrationId(pickDefaultIntegration(integrations));
+    setKeyMode(defaultKeyMode(keyPolicy));
     setModel("");
     setModels([]);
     setApiKey("");
@@ -81,7 +93,20 @@ export function ProfilesPage() {
     const [nextProfiles, nextIntegrations] = await Promise.all([listProfiles(), listIntegrations()]);
     setProfiles(nextProfiles);
     setIntegrations(nextIntegrations);
-    setIntegrationId((current) => current || (nextIntegrations[0] ? String(nextIntegrations[0].id) : ""));
+    setIntegrationId((current) => current || pickDefaultIntegration(nextIntegrations));
+
+    let policy: KeyPolicy | null = null;
+    try {
+      const subscription = await getMySubscription();
+      policy = subscription.keypolicy;
+    } catch {
+      policy = null;
+    }
+    setKeyPolicy(policy);
+    setKeyMode((current) => {
+      const allowed = allowedKeyModes(policy);
+      return allowed.includes(current) ? current : defaultKeyMode(policy);
+    });
   }
 
   useEffect(() => {
@@ -98,8 +123,9 @@ export function ProfilesPage() {
       await createProfile({
         title: title.trim(),
         integration: Number(integrationId),
+        key_mode: keyMode,
         model: model.trim(),
-        DeepSeekApiKey: apiKey.trim(),
+        DeepSeekApiKey: keyMode === "byok" ? apiKey.trim() : "",
         Prompt: prompt.trim(),
       });
       resetCreateForm();
@@ -125,7 +151,7 @@ export function ProfilesPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="page-stack">
       <PageHeader
         title="Profiles"
         description="Open a profile to add products."
@@ -133,10 +159,10 @@ export function ProfilesPage() {
           !showCreateForm ? (
             <Button
               className="shrink-0"
-              onClick={() => {
+              onPress={() => {
                 setShowCreateForm(true);
                 if (integrationId) {
-                  void loadModels(integrationId, apiKey);
+                  void loadModels(integrationId, keyMode === "byok" ? apiKey : "");
                 }
               }}
             >
@@ -145,24 +171,20 @@ export function ProfilesPage() {
           ) : null
         }
       />
-      {error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
+      {error ? <StatusBanner>{error}</StatusBanner> : null}
 
       {showCreateForm ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>New profile</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-4" onSubmit={onCreate}>
-              <div className="space-y-2">
+        <Card className="glass-panel fade-in rounded-3xl p-1">
+          <Card.Header className="px-6 pt-6">
+            <Card.Title>New profile</Card.Title>
+          </Card.Header>
+          <Card.Content className="px-6 pb-6">
+            <form className="flex flex-col gap-5" onSubmit={onCreate}>
+              <div className="space-y-2.5">
                 <Label htmlFor="shop">Shop name</Label>
-                <Input id="shop" value={title} onChange={(event) => setTitle(event.target.value)} required />
+                <Input id="shop" fullWidth value={title} onChange={(event) => setTitle(event.target.value)} required />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <Label htmlFor="integration">Integration</Label>
                 <NativeSelect
                   id="integration"
@@ -170,7 +192,7 @@ export function ProfilesPage() {
                   onChange={(event) => {
                     const nextId = event.target.value;
                     setIntegrationId(nextId);
-                    void loadModels(nextId, apiKey);
+                    void loadModels(nextId, keyMode === "byok" ? apiKey : "");
                   }}
                   required
                 >
@@ -178,36 +200,75 @@ export function ProfilesPage() {
                   {integrations.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name}
+                      {item.has_api_key ? " · platform key" : ""}
+                      {item.is_platform_default ? " · default" : ""}
                     </option>
                   ))}
                 </NativeSelect>
                 <FieldHint>Ask an admin to add an integration if the list is empty.</FieldHint>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="key">API key</Label>
-                <Input
-                  id="key"
-                  type="password"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  onBlur={() => {
-                    if (integrationId) {
-                      void loadModels(integrationId, apiKey);
-                    }
-                  }}
-                  required
-                />
-                <FieldHint>The key is stored on the profile and will not be shown again.</FieldHint>
+              <div className="space-y-2.5">
+                <Label htmlFor="key-mode">API key source</Label>
+                {keyModeOptions.length > 1 ? (
+                  <NativeSelect
+                    id="key-mode"
+                    value={keyMode}
+                    onChange={(event) => {
+                      const next = event.target.value as ProfileKeyMode;
+                      setKeyMode(next);
+                      if (integrationId) {
+                        void loadModels(integrationId, next === "byok" ? apiKey : "");
+                      }
+                    }}
+                  >
+                    {keyModeOptions.includes("platform") ? (
+                      <option value="platform">Use platform key (from integration)</option>
+                    ) : null}
+                    {keyModeOptions.includes("byok") ? (
+                      <option value="byok">Use my own API key</option>
+                    ) : null}
+                  </NativeSelect>
+                ) : (
+                  <p className="text-sm text-muted">
+                    {keyMode === "byok"
+                      ? "Your plan requires your own API key."
+                      : "Your plan uses the platform key from the integration."}
+                  </p>
+                )}
+                {keyPolicy === "hybrid" ? (
+                  <FieldHint>
+                    Platform key works only for integrations where an admin saved a built-in key.
+                  </FieldHint>
+                ) : null}
               </div>
-              <div className="space-y-2">
+              {keyMode === "byok" ? (
+                <div className="space-y-2.5">
+                  <Label htmlFor="key">API key</Label>
+                  <Input
+                    id="key"
+                    type="password"
+                    fullWidth
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    onBlur={() => {
+                      if (integrationId) {
+                        void loadModels(integrationId, apiKey);
+                      }
+                    }}
+                    required
+                  />
+                  <FieldHint>The key is stored on the profile and will not be shown again.</FieldHint>
+                </div>
+              ) : null}
+              <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <Label htmlFor="profile-model">Model</Label>
                   <Button
                     variant="outline"
-                    size="xs"
+                    size="sm"
                     type="button"
-                    disabled={loadingModels || busy || !integrationId}
-                    onClick={() => void loadModels(integrationId, apiKey)}
+                    isDisabled={loadingModels || busy || !integrationId}
+                    onPress={() => void loadModels(integrationId, keyMode === "byok" ? apiKey : "")}
                   >
                     {loadingModels ? "Loading…" : "Load models"}
                   </Button>
@@ -228,25 +289,26 @@ export function ProfilesPage() {
                 ) : (
                   <Input
                     id="profile-model"
+                    fullWidth
                     value={model}
                     onChange={(event) => setModel(event.target.value)}
                     placeholder="Load models or type an id"
                   />
                 )}
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <Label htmlFor="prompt">Custom prompt (optional)</Label>
-                <Textarea id="prompt" rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+                <TextArea id="prompt" fullWidth rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" isDisabled={busy} isPending={busy}>
                   Add profile
                 </Button>
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={busy}
-                  onClick={() => {
+                  isDisabled={busy}
+                  onPress={() => {
                     resetCreateForm();
                     setError(null);
                   }}
@@ -255,43 +317,67 @@ export function ProfilesPage() {
                 </Button>
               </div>
             </form>
-          </CardContent>
+          </Card.Content>
         </Card>
       ) : null}
 
       <div className="flex flex-col gap-3">
         {profiles.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No profiles yet. Click “Create profile”.</p>
+          <p className="text-sm text-muted">No profiles yet. Click “Create profile”.</p>
         ) : (
-          profiles.map((profile) => (
-            <Card key={profile.id} size="sm">
-              <CardContent className="flex items-center justify-between gap-3">
-                <Link to={`/profiles/${profile.id}`} className="min-w-0">
-                  <h2 className="font-medium">{profile.title}</h2>
-                  <div className="mt-2 flex flex-wrap gap-2">
+          profiles.map((profile, index) => (
+            <Card
+              key={profile.id}
+              className="lift-card glass-panel fade-in rounded-3xl p-1"
+              style={{ animationDelay: `${index * 40}ms` }}
+            >
+              <Card.Content className="list-row gap-4 px-6 py-5">
+                <Link to={`/profiles/${profile.id}`} className="min-w-0 flex-1">
+                  <h2 className="font-display text-lg font-semibold">{profile.title}</h2>
+                  <div className="mt-3 flex flex-wrap gap-2">
                     {profile.model || integrations.find((item) => item.id === profile.integration)?.model ? (
-                      <Badge variant="secondary">
+                      <Chip size="sm" variant="soft" color="accent">
                         {profile.model ||
                           integrations.find((item) => item.id === profile.integration)?.model ||
                           "Model selected"}
-                      </Badge>
+                      </Chip>
                     ) : profile.integration ? (
-                      <Badge variant="secondary">
+                      <Chip size="sm" variant="soft">
                         {integrations.find((item) => item.id === profile.integration)?.name || "Integration"}
-                      </Badge>
+                      </Chip>
                     ) : null}
-                    <Badge variant={profile.has_deepseek_key ? "default" : "outline"}>
-                      {profile.has_deepseek_key ? "Key saved" : "No key"}
-                    </Badge>
-                    {profile.can_edit ? null : <Badge variant="outline">View only</Badge>}
+                    <Chip
+                      size="sm"
+                      color={
+                        profile.key_mode === "platform" || profile.has_deepseek_key ? "success" : "default"
+                      }
+                      variant="soft"
+                    >
+                      {profile.key_mode === "platform"
+                        ? "Platform key"
+                        : profile.has_deepseek_key
+                          ? "Own key"
+                          : "No key"}
+                    </Chip>
+                    {profile.can_edit ? null : (
+                      <Chip size="sm" variant="secondary">
+                        View only
+                      </Chip>
+                    )}
                   </div>
                 </Link>
                 {profile.can_edit ? (
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => onDelete(profile.id)}>
+                  <Button
+                    variant="danger-soft"
+                    size="sm"
+                    className="shrink-0"
+                    isDisabled={busy}
+                    onPress={() => void onDelete(profile.id)}
+                  >
                     Delete
                   </Button>
                 ) : null}
-              </CardContent>
+              </Card.Content>
             </Card>
           ))
         )}

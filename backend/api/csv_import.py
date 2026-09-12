@@ -2,26 +2,44 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import re
 
 MAX_CSV_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 5_000
 CHAR_LIMITS = {
     "title": 200,
     "google_product_category": 200,
+    "google_product_category_path": 500,
     "external_id": 200,
     "barcode": 200,
     "group_id": 200,
+    "meta_title": 200,
+    "meta_description": 320,
+    "tags": 500,
+    "product_type": 200,
 }
 
 HEADER_ALIASES: dict[str, set[str]] = {
     "title": {"title", "name", "product_name", "product_title", "назва", "название", "товар"},
     "description": {"description", "desc", "опис", "описание"},
+    "short_description": {"short_description", "short_desc", "summary", "короткий_опис"},
+    "meta_title": {"meta_title", "seo_title", "page_title"},
+    "meta_description": {"meta_description", "seo_description", "meta_desc"},
+    "bullet_points": {"bullet_points", "bullets", "features", "переваги"},
+    "tags": {"tags", "tag", "keywords", "теги"},
+    "product_type": {"product_type", "type", "store_category", "тип"},
     "google_product_category": {
         "google_product_category",
         "google_category",
         "category",
         "категорія",
         "категория",
+    },
+    "google_product_category_path": {
+        "google_product_category_path",
+        "google_category_path",
+        "category_path",
     },
     "external_id": {
         "external_id",
@@ -76,7 +94,22 @@ def _detect_delimiter(text: str) -> str:
     return best if counts[best] else ","
 
 
-def parse_product_csv(data: bytes) -> tuple[list[dict[str, str]], list[dict[str, object]]]:
+def _parse_bullet_points(value: str) -> list[str]:
+    text = (value or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            raw = json.loads(text)
+            if isinstance(raw, list):
+                return [str(item).strip() for item in raw if str(item).strip()][:8]
+        except json.JSONDecodeError:
+            pass
+    parts = re.split(r"[\n|;]+", text)
+    return [part.strip(" •-\t") for part in parts if part.strip(" •-\t")][:8]
+
+
+def parse_product_csv(data: bytes) -> tuple[list[dict], list[dict[str, object]]]:
     text = decode_csv_bytes(data)
     reader = csv.DictReader(io.StringIO(text), delimiter=_detect_delimiter(text))
     if not reader.fieldnames:
@@ -93,7 +126,7 @@ def parse_product_csv(data: bytes) -> tuple[list[dict[str, str]], list[dict[str,
     if "title" not in header_map.values():
         raise CsvImportError("CSV must include a title (or name) column.")
 
-    products: list[dict[str, str]] = []
+    products: list[dict] = []
     errors: list[dict[str, object]] = []
 
     for data_row_number, raw_row in enumerate(reader, start=1):
@@ -122,7 +155,14 @@ def parse_product_csv(data: bytes) -> tuple[list[dict[str, str]], list[dict[str,
             {
                 "title": title,
                 "description": row.get("description", ""),
+                "short_description": row.get("short_description", ""),
+                "meta_title": row.get("meta_title", ""),
+                "meta_description": row.get("meta_description", ""),
+                "bullet_points": _parse_bullet_points(row.get("bullet_points", "")),
+                "tags": row.get("tags", ""),
+                "product_type": row.get("product_type", ""),
                 "google_product_category": row.get("google_product_category", ""),
+                "google_product_category_path": row.get("google_product_category_path", ""),
                 "external_id": row.get("external_id", ""),
                 "barcode": row.get("barcode", ""),
                 "group_id": row.get("group_id", ""),
@@ -137,9 +177,25 @@ EXPORT_FIELDS = (
     "external_id",
     "barcode",
     "group_id",
+    "product_type",
+    "tags",
+    "short_description",
     "description",
+    "meta_title",
+    "meta_description",
+    "bullet_points",
     "google_product_category",
+    "google_product_category_path",
 )
+
+
+def _export_value(product, field: str) -> str:
+    value = getattr(product, field, "")
+    if field == "bullet_points":
+        if isinstance(value, list):
+            return " | ".join(str(item) for item in value if str(item).strip())
+        return str(value or "")
+    return "" if value is None else str(value)
 
 
 def build_product_csv(products) -> bytes:
@@ -147,6 +203,6 @@ def build_product_csv(products) -> bytes:
     writer = csv.DictWriter(buffer, fieldnames=EXPORT_FIELDS, lineterminator="\n")
     writer.writeheader()
     for product in products:
-        writer.writerow({field: getattr(product, field, "") or "" for field in EXPORT_FIELDS})
+        writer.writerow({field: _export_value(product, field) for field in EXPORT_FIELDS})
     # UTF-8 BOM so Excel opens Ukrainian/Latin characters correctly
     return ("\ufeff" + buffer.getvalue()).encode("utf-8")

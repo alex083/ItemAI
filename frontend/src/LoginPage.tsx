@@ -1,13 +1,11 @@
 import { type FormEvent, useState } from "react";
+import { Button, Input, Label } from "@heroui/react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { login } from "./api";
 import { useAuth } from "./auth";
 import { AuthLayout } from "./AuthLayout";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { StatusBanner } from "./components/status-banner";
 
 export function LoginPage() {
   const { loggedIn, completeLogin } = useAuth();
@@ -38,40 +36,38 @@ export function LoginPage() {
 
   return (
     <AuthLayout title="Sign in" subtitle="Sign in to open your profiles.">
-      <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-        {error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="space-y-2">
+      <form className="flex flex-col gap-5" onSubmit={onSubmit}>
+        {error ? <StatusBanner>{error}</StatusBanner> : null}
+        <div className="space-y-2.5">
           <Label htmlFor="username">Username</Label>
           <Input
             id="username"
+            fullWidth
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="username"
             required
           />
         </div>
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           <Label htmlFor="password">Password</Label>
           <Input
             id="password"
             type="password"
+            fullWidth
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             autoComplete="current-password"
             required
           />
         </div>
-        <Button type="submit" disabled={busy}>
+        <Button type="submit" fullWidth isPending={busy} isDisabled={busy}>
           Sign in
         </Button>
       </form>
-      <p className="mt-4 text-sm text-muted-foreground">
+      <p className="mt-4 text-sm text-muted">
         No account?{" "}
-        <Link className="text-primary underline-offset-4 hover:underline" to="/register">
+        <Link className="font-medium text-[var(--accent)] underline-offset-4 hover:underline" to="/register">
           Register
         </Link>
       </p>

@@ -9,6 +9,8 @@ from .views import (
     ProfileViewSet,
     PromptTemplateViewSet,
     RegisterView,
+    TariffViewSet,
+    UserSubscriptionViewSet,
     health,
 )
 
@@ -17,6 +19,8 @@ router.register("integrations", IntegrationViewSet, basename="integration")
 router.register("prompt-templates", PromptTemplateViewSet, basename="prompt-template")
 router.register("profiles", ProfileViewSet, basename="profile")
 router.register("products", ProductViewSet, basename="product")
+router.register("tariffs", TariffViewSet, basename="tariff")
+router.register("subscriptions", UserSubscriptionViewSet, basename="subscription")
 
 urlpatterns = [
     path("health/", health, name="health"),

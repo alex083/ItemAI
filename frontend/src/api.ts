@@ -87,14 +87,19 @@ export type Integration = {
   name: string;
   api_url: string;
   model: string;
+  has_api_key: boolean;
+  is_platform_default: boolean;
   is_active: boolean;
 };
+
+export type ProfileKeyMode = "platform" | "byok";
 
 export type Profile = {
   id: number;
   title: string;
   user: number | null;
   integration: number | null;
+  key_mode: ProfileKeyMode;
   model: string;
   prompt_template: number | null;
   Prompt: string;
@@ -106,13 +111,19 @@ export type Product = {
   id: number;
   title: string;
   description: string;
+  short_description: string;
+  meta_title: string;
+  meta_description: string;
+  bullet_points: string[];
+  tags: string;
+  product_type: string;
   profile: number;
   google_product_category: string;
+  google_product_category_path: string;
   external_id: string;
   barcode: string;
   group_id: string;
   created_at?: string;
-  google_product_category_path?: string;
   can_edit: boolean;
 };
 
@@ -129,7 +140,14 @@ export function listIntegrations() {
   return request<Integration[]>("/api/integrations/");
 }
 
-export function createIntegration(payload: { name: string; api_url: string; model: string }) {
+export function createIntegration(payload: {
+  name: string;
+  api_url: string;
+  model: string;
+  api_key?: string;
+  is_platform_default?: boolean;
+  is_active?: boolean;
+}) {
   return request<Integration>("/api/integrations/", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -138,7 +156,14 @@ export function createIntegration(payload: { name: string; api_url: string; mode
 
 export function updateIntegration(
   id: number,
-  payload: { name?: string; api_url?: string; model?: string; is_active?: boolean },
+  payload: {
+    name?: string;
+    api_url?: string;
+    model?: string;
+    api_key?: string;
+    is_platform_default?: boolean;
+    is_active?: boolean;
+  },
 ) {
   return request<Integration>(`/api/integrations/${id}/`, {
     method: "PATCH",
@@ -200,8 +225,9 @@ export function getProfile(id: number) {
 export function createProfile(payload: {
   title: string;
   integration: number;
+  key_mode?: ProfileKeyMode;
   model?: string;
-  DeepSeekApiKey: string;
+  DeepSeekApiKey?: string;
   Prompt?: string;
 }) {
   return request<Profile>("/api/profiles/", {
@@ -212,7 +238,14 @@ export function createProfile(payload: {
 
 export function updateProfile(
   id: number,
-  payload: { title?: string; integration?: number; model?: string; DeepSeekApiKey?: string; Prompt?: string },
+  payload: {
+    title?: string;
+    integration?: number;
+    key_mode?: ProfileKeyMode;
+    model?: string;
+    DeepSeekApiKey?: string;
+    Prompt?: string;
+  },
 ) {
   return request<Profile>(`/api/profiles/${id}/`, {
     method: "PATCH",
@@ -230,6 +263,30 @@ export function listProducts() {
 
 export function getProduct(id: number) {
   return request<Product>(`/api/products/${id}/`);
+}
+
+export function updateProduct(
+  id: number,
+  payload: {
+    title?: string;
+    description?: string;
+    short_description?: string;
+    meta_title?: string;
+    meta_description?: string;
+    bullet_points?: string[];
+    tags?: string;
+    product_type?: string;
+    google_product_category?: string;
+    google_product_category_path?: string;
+    external_id?: string;
+    barcode?: string;
+    group_id?: string;
+  },
+) {
+  return request<Product>(`/api/products/${id}/`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function createProduct(payload: {
@@ -296,5 +353,77 @@ export function generateProduct(id: number, prompt?: string) {
   return request<Product>(`/api/products/${id}/generate/`, {
     method: "POST",
     body: JSON.stringify(prompt ? { prompt } : {}),
+  });
+}
+
+export type KeyPolicy = "hybrid" | "platform_key" | "byok";
+
+export function allowedKeyModes(policy: KeyPolicy | null | undefined): ProfileKeyMode[] {
+  if (policy === "byok") return ["byok"];
+  if (policy === "platform_key") return ["platform"];
+  return ["platform", "byok"];
+}
+
+export function defaultKeyMode(policy: KeyPolicy | null | undefined): ProfileKeyMode {
+  return allowedKeyModes(policy)[0] ?? "platform";
+}
+
+export type Tariff = {
+  id: number;
+  title: string;
+  description: string;
+  price: string;
+  keypolicy: KeyPolicy;
+  number_of_products: number;
+  number_of_profiles: number;
+  number_of_generations: number;
+  is_active: boolean;
+};
+
+export type UserSubscription = {
+  id: number;
+  user: number;
+  tariff: number;
+  tariff_title: string;
+  keypolicy: KeyPolicy;
+  product_limit: number;
+  profile_limit: number;
+  generation_limit: number;
+  product_usage: number;
+  profile_usage: number;
+  generation_usage: number;
+  start_date: string;
+  end_date: string | null;
+  is_active: boolean;
+};
+
+export function listTariffs() {
+  return request<Tariff[]>("/api/tariffs/");
+}
+
+export function createTariff(payload: {
+  title: string;
+  description?: string;
+  price: string | number;
+  keypolicy: KeyPolicy;
+  number_of_products: number;
+  number_of_profiles: number;
+  number_of_generations: number;
+  is_active?: boolean;
+}) {
+  return request<Tariff>("/api/tariffs/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getMySubscription() {
+  return request<UserSubscription>("/api/subscriptions/me/");
+}
+
+export function subscribeToTariff(tariffId: number) {
+  return request<UserSubscription>("/api/subscriptions/subscribe/", {
+    method: "POST",
+    body: JSON.stringify({ tariff: tariffId }),
   });
 }

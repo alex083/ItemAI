@@ -1,9 +1,8 @@
+import { Button } from "@heroui/react";
 import { NavLink, Navigate, Outlet } from "react-router-dom";
 import { cn } from "cn";
 
 import { useAuth } from "./auth";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 
 function NavItem({ to, children }: { to: string; children: string }) {
   return (
@@ -11,8 +10,10 @@ function NavItem({ to, children }: { to: string; children: string }) {
       to={to}
       className={({ isActive }) =>
         cn(
-          "rounded-3xl px-3 py-1.5 text-sm font-medium transition-colors",
-          isActive ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+          "rounded-full px-4 py-2 text-sm font-medium transition-colors duration-200",
+          isActive
+            ? "bg-[color-mix(in_oklch,var(--accent)_16%,white)] text-[var(--accent)]"
+            : "text-muted hover:bg-white/60 hover:text-foreground",
         )
       }
     >
@@ -29,29 +30,30 @@ export function Layout() {
   }
 
   return (
-    <div className="min-h-svh bg-background">
-      <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between gap-3 px-4">
-          <NavLink to="/profiles" className="font-heading text-sm font-medium tracking-tight">
-            ItemAI
+    <div className="app-shell min-h-svh">
+      <header className="sticky top-0 z-20 border-b border-white/40 bg-white/55 backdrop-blur-xl">
+        <div className="mx-auto flex h-[4.25rem] max-w-6xl items-center justify-between gap-4 px-5 md:px-6">
+          <NavLink to="/profiles" className="font-brand text-lg font-semibold text-foreground">
+            Item<span className="text-[var(--accent)]">AI</span>
           </NavLink>
-          <nav className="hidden items-center gap-1 md:flex">
+          <nav className="hidden items-center gap-1.5 md:flex">
             <NavItem to="/profiles">Profiles</NavItem>
+            <NavItem to="/tariffs">Tariffs</NavItem>
             <NavItem to="/prompts">Prompt templates</NavItem>
             {user?.is_staff ? <NavItem to="/integrations">Integrations</NavItem> : null}
           </nav>
-          <Button variant="outline" size="sm" onClick={logout}>
+          <Button variant="outline" size="sm" onPress={logout}>
             Log out
           </Button>
         </div>
-        <div className="mx-auto flex max-w-3xl gap-1 overflow-x-auto px-4 pb-3 md:hidden">
+        <div className="mx-auto flex max-w-6xl gap-1.5 overflow-x-auto px-5 pb-3.5 md:hidden md:px-6">
           <NavItem to="/profiles">Profiles</NavItem>
+          <NavItem to="/tariffs">Tariffs</NavItem>
           <NavItem to="/prompts">Prompt templates</NavItem>
           {user?.is_staff ? <NavItem to="/integrations">Integrations</NavItem> : null}
         </div>
       </header>
-      <Separator className="md:hidden" />
-      <main className="mx-auto max-w-3xl px-4 py-8">
+      <main className="mx-auto max-w-6xl px-5 py-10 md:px-6 md:py-14">
         <Outlet />
       </main>
     </div>

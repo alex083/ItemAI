@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { Button, Card, Chip, Input, Label } from "@heroui/react";
 import { Navigate } from "react-router-dom";
 
 import {
@@ -12,14 +13,9 @@ import {
 } from "./api";
 import { useAuth } from "./auth";
 import { FieldHint } from "@/components/field-hint";
+import { NativeSelect } from "@/components/native-select";
 import { PageHeader } from "@/components/page-header";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import { StatusBanner } from "@/components/status-banner";
 
 export function IntegrationsPage() {
   const { user } = useAuth();
@@ -28,7 +24,8 @@ export function IntegrationsPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState("");
   const [apiUrl, setApiUrl] = useState("");
-  const [fetchKey, setFetchKey] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [isPlatformDefault, setIsPlatformDefault] = useState(false);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ProviderModel[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -38,7 +35,8 @@ export function IntegrationsPage() {
   function resetForm() {
     setName("");
     setApiUrl("");
-    setFetchKey("");
+    setApiKey("");
+    setIsPlatformDefault(false);
     setModel("");
     setModels([]);
     setShowForm(false);
@@ -59,7 +57,7 @@ export function IntegrationsPage() {
   }, [user?.is_staff]);
 
   if (!user) {
-    return <p className="text-sm text-muted-foreground">Loading…</p>;
+    return <p className="text-sm text-muted">Loading…</p>;
   }
   if (!user.is_staff) {
     return <Navigate to="/profiles" replace />;
@@ -75,7 +73,8 @@ export function IntegrationsPage() {
     try {
       const data = await listAvailableModels({
         api_url: apiUrl.trim(),
-        api_key: fetchKey.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+        integration: editingId || undefined,
       });
       setModels(data.models);
       setModel((current) => {
@@ -96,7 +95,13 @@ export function IntegrationsPage() {
     setBusy(true);
     setError(null);
     try {
-      const payload = { name: name.trim(), api_url: apiUrl.trim(), model: model.trim() };
+      const payload = {
+        name: name.trim(),
+        api_url: apiUrl.trim(),
+        model: model.trim(),
+        is_platform_default: isPlatformDefault,
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+      };
       if (editingId) {
         await updateIntegration(editingId, payload);
       } else {
@@ -115,7 +120,8 @@ export function IntegrationsPage() {
     setEditingId(integration.id);
     setName(integration.name);
     setApiUrl(integration.api_url);
-    setFetchKey("");
+    setApiKey("");
+    setIsPlatformDefault(integration.is_platform_default);
     setModel(integration.model);
     setModels(integration.model ? [{ id: integration.model, name: integration.model }] : []);
     setShowForm(true);
@@ -139,45 +145,43 @@ export function IntegrationsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="page-stack">
       <PageHeader
         title="Integrations"
-        description="Add an API name and URL, then load models from the provider."
+        description="Admin integrations with optional built-in keys for platform profiles."
         action={
           !showForm ? (
-            <Button className="shrink-0" onClick={() => setShowForm(true)}>
+            <Button className="shrink-0" onPress={() => setShowForm(true)}>
               Create integration
             </Button>
           ) : null
         }
       />
-      {error ? (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : null}
+      {error ? <StatusBanner>{error}</StatusBanner> : null}
 
       {showForm ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>{editingId ? "Edit integration" : "New integration"}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="flex flex-col gap-4" onSubmit={onSubmit}>
-              <div className="space-y-2">
+        <Card className="glass-panel fade-in rounded-3xl p-1">
+          <Card.Header className="px-6 pt-6">
+            <Card.Title>{editingId ? "Edit integration" : "New integration"}</Card.Title>
+          </Card.Header>
+          <Card.Content className="px-6 pb-6">
+            <form className="flex flex-col gap-5" onSubmit={onSubmit}>
+              <div className="space-y-2.5">
                 <Label htmlFor="integration-name">API name</Label>
                 <Input
                   id="integration-name"
+                  fullWidth
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   required
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <Label htmlFor="integration-url">API URL</Label>
                 <Input
                   id="integration-url"
                   type="url"
+                  fullWidth
                   value={apiUrl}
                   onChange={(event) => setApiUrl(event.target.value)}
                   placeholder="https://openrouter.ai/api/v1"
@@ -185,25 +189,38 @@ export function IntegrationsPage() {
                 />
                 <FieldHint>OpenAI-compatible base URL. Models are loaded from /models.</FieldHint>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="integration-fetch-key">Key to load models (optional)</Label>
+              <div className="space-y-2.5">
+                <Label htmlFor="integration-api-key">Built-in API key</Label>
                 <Input
-                  id="integration-fetch-key"
+                  id="integration-api-key"
                   type="password"
-                  value={fetchKey}
-                  onChange={(event) => setFetchKey(event.target.value)}
+                  fullWidth
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                  placeholder={editingId ? "Leave blank to keep current key" : "Platform key for this provider"}
                 />
-                <FieldHint>Needed for OpenAI or DeepSeek. OpenRouter usually works without it.</FieldHint>
+                <FieldHint>
+                  Stored on the integration. Profiles in “platform key” mode will use it. Never shown again.
+                </FieldHint>
               </div>
-              <div className="space-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  className="size-4 accent-foreground"
+                  checked={isPlatformDefault}
+                  onChange={(event) => setIsPlatformDefault(event.target.checked)}
+                />
+                Set as default platform integration
+              </label>
+              <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <Label htmlFor="integration-model">Default model</Label>
                   <Button
                     variant="outline"
-                    size="xs"
+                    size="sm"
                     type="button"
-                    disabled={loadingModels || busy}
-                    onClick={() => void onLoadModels()}
+                    isDisabled={loadingModels || busy}
+                    onPress={() => void onLoadModels()}
                   >
                     {loadingModels ? "Loading…" : "Load models"}
                   </Button>
@@ -223,6 +240,7 @@ export function IntegrationsPage() {
                 ) : (
                   <Input
                     id="integration-model"
+                    fullWidth
                     value={model}
                     onChange={(event) => setModel(event.target.value)}
                     placeholder="Load models or type an id"
@@ -230,14 +248,14 @@ export function IntegrationsPage() {
                 )}
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={busy}>
+                <Button type="submit" isDisabled={busy} isPending={busy}>
                   {editingId ? "Save integration" : "Add integration"}
                 </Button>
                 <Button
                   variant="outline"
                   type="button"
-                  disabled={busy}
-                  onClick={() => {
+                  isDisabled={busy}
+                  onPress={() => {
                     resetForm();
                     setError(null);
                   }}
@@ -246,36 +264,57 @@ export function IntegrationsPage() {
                 </Button>
               </div>
             </form>
-          </CardContent>
+          </Card.Content>
         </Card>
       ) : null}
 
       <div className="flex flex-col gap-3">
         {integrations.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No integrations yet. Click “Create integration”.</p>
+          <p className="text-sm text-muted">No integrations yet. Click “Create integration”.</p>
         ) : (
-          integrations.map((integration) => (
-            <Card key={integration.id} size="sm">
-              <CardContent className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="font-medium">{integration.name}</h2>
-                  <p className="mt-1 break-all text-sm text-muted-foreground">{integration.api_url}</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {integration.model ? <Badge variant="secondary">{integration.model}</Badge> : null}
-                    <Badge variant={integration.is_active ? "default" : "outline"}>
+          integrations.map((integration, index) => (
+            <Card
+              key={integration.id}
+              className="lift-card glass-panel fade-in rounded-3xl p-1"
+              style={{ animationDelay: `${index * 40}ms` }}
+            >
+              <Card.Content className="list-row items-start gap-4 px-6 py-5">
+                <div className="min-w-0 flex-1">
+                  <h2 className="font-display text-lg font-semibold">{integration.name}</h2>
+                  <p className="mt-1.5 break-all text-sm text-muted">{integration.api_url}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {integration.model ? (
+                      <Chip size="sm" variant="soft" color="accent">
+                        {integration.model}
+                      </Chip>
+                    ) : null}
+                    <Chip size="sm" color={integration.is_active ? "success" : "default"} variant="soft">
                       {integration.is_active ? "Active" : "Inactive"}
-                    </Badge>
+                    </Chip>
+                    <Chip size="sm" color={integration.has_api_key ? "success" : "default"} variant="soft">
+                      {integration.has_api_key ? "Built-in key" : "No built-in key"}
+                    </Chip>
+                    {integration.is_platform_default ? (
+                      <Chip size="sm" variant="soft" color="accent">
+                        Default
+                      </Chip>
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => onEdit(integration)}>
+                  <Button variant="outline" size="sm" isDisabled={busy} onPress={() => onEdit(integration)}>
                     Edit
                   </Button>
-                  <Button variant="outline" size="sm" disabled={busy} onClick={() => void onDelete(integration.id)}>
+                  <Button
+                    variant="danger-soft"
+                    size="sm"
+                    isDisabled={busy}
+                    onPress={() => void onDelete(integration.id)}
+                  >
                     Delete
                   </Button>
                 </div>
-              </CardContent>
+              </Card.Content>
             </Card>
           ))
         )}

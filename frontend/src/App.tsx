@@ -7,6 +7,7 @@ import { ProductDetailPage } from "./ProductDetailPage";
 import { ProfileDetailPage } from "./ProfileDetailPage";
 import { ProfilesPage } from "./ProfilesPage";
 import { PromptsPage } from "./PromptsPage";
+import { TariffsPage } from "./TariffsPage";
 import { RegisterPage } from "./RegisterPage";
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/profiles" element={<ProfilesPage />} />
         <Route path="/profiles/:id" element={<ProfileDetailPage />} />
         <Route path="/profiles/:id/products/:productId" element={<ProductDetailPage />} />
+        <Route path="/tariffs" element={<TariffsPage />} />
         <Route path="/prompts" element={<PromptsPage />} />
         <Route path="/integrations" element={<IntegrationsPage />} />
       </Route>

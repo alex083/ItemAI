@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth import authenticate
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpResponse
 from django.utils.text import slugify
@@ -8,16 +9,17 @@ from openai import APIError
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import action, api_view
+from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 
 from .csv_import import CsvImportError, build_product_csv, parse_product_csv
 from .deepseek import DeepSeekError, generate_product_copy
-from .models import Integration, Product, Profile, PromptTemplate
+from .models import Integration, Product, Profile, PromptTemplate, Tariff, UserSubscription
 from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly, is_admin
 from .providers import ProviderError, fetch_available_models
 from .serializers import (
@@ -30,7 +32,18 @@ from .serializers import (
     ProfileSerializer,
     PromptTemplateSerializer,
     RegisterSerializer,
+    SubscribeSerializer,
+    TariffSerializer,
+    UserSubscriptionSerializer,
     user_payload,
+)
+from .subscriptions import (
+    apply_tariff_purchase,
+    consume_generation_slot,
+    consume_product_slot,
+    consume_profile_slot,
+    ensure_key_mode_allowed,
+    get_active_subscription,
 )
 
 
@@ -108,8 +121,12 @@ class IntegrationViewSet(ModelViewSet):
             )
             if profile is None:
                 return Response({"detail": "Profile not found."}, status=status.HTTP_404_NOT_FOUND)
-            if profile.user_id == request.user.id and profile.DeepSeekApiKey:
-                api_key = api_key or profile.DeepSeekApiKey
+            if not api_key:
+                try:
+                    api_key = profile.resolve_api_key()
+                except ValueError:
+                    if profile.user_id == request.user.id and profile.DeepSeekApiKey:
+                        api_key = profile.DeepSeekApiKey
             if integration_id in (None, "") and profile.integration_id:
                 integration_id = profile.integration_id
 
@@ -118,6 +135,8 @@ class IntegrationViewSet(ModelViewSet):
             if integration is None:
                 return Response({"detail": "Integration not found."}, status=status.HTTP_404_NOT_FOUND)
             api_url = integration.api_url
+            if not api_key and integration.api_key:
+                api_key = integration.api_key
         elif not api_url:
             return Response({"detail": "API URL is required."}, status=status.HTTP_400_BAD_REQUEST)
         elif not is_admin(request.user):
@@ -155,7 +174,9 @@ class ProfileViewSet(ModelViewSet):
             Q(user=self.request.user) | Q(user__isnull=True)
         )
 
+    @transaction.atomic
     def perform_create(self, serializer):
+        consume_profile_slot(self.request.user)
         serializer.save(user=self.request.user)
 
 
@@ -168,6 +189,11 @@ class ProductViewSet(ModelViewSet):
             Q(profile__user=self.request.user) | Q(profile__user__isnull=True)
         )
 
+    @transaction.atomic
+    def perform_create(self, serializer):
+        consume_product_slot(self.request.user, count=1)
+        serializer.save()
+
     @action(detail=False, methods=["post"], url_path="import", parser_classes=[MultiPartParser, FormParser])
     def import_csv(self, request: Request) -> Response:
         serializer = ProductCsvImportSerializer(data=request.data, context={"request": request})
@@ -179,6 +205,12 @@ class ProductViewSet(ModelViewSet):
             payload, parse_errors = parse_product_csv(uploaded.read())
         except CsvImportError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if payload:
+            try:
+                consume_product_slot(request.user, count=len(payload))
+            except ValidationError as exc:
+                return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
 
         created = Product.objects.bulk_create(
             [Product(profile=profile, **fields) for fields in payload],
@@ -229,14 +261,29 @@ class ProductViewSet(ModelViewSet):
         system_prompt = custom_prompt or product.profile.get_system_prompt()
 
         try:
+            ensure_key_mode_allowed(request.user, product.profile.key_mode)
+            if product.profile.key_mode == Profile.KeyMode.PLATFORM:
+                subscription = get_active_subscription(request.user)
+                if subscription is None:
+                    raise ValidationError({"detail": "Choose a tariff first."})
+                if subscription.generation_usage >= subscription.generation_limit:
+                    raise ValidationError(
+                        {"detail": "Generation limit reached. Buy more capacity or upgrade."}
+                    )
             integration = product.profile.integration
             result = generate_product_copy(
-                api_key=product.profile.DeepSeekApiKey,
+                api_key=product.profile.resolve_api_key(),
                 system_prompt=system_prompt,
                 title=product.title,
                 base_url=integration.api_url if integration else None,
                 model=product.profile.get_generation_model() or None,
             )
+            if product.profile.key_mode == Profile.KeyMode.PLATFORM:
+                consume_generation_slot(request.user)
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except DeepSeekError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except APIError as exc:
@@ -256,8 +303,58 @@ class ProductViewSet(ModelViewSet):
             )
 
         product.description = result["description"]
+        product.short_description = result["short_description"]
+        product.meta_title = result["meta_title"]
+        product.meta_description = result["meta_description"]
+        product.bullet_points = result["bullet_points"]
+        product.tags = result["tags"]
+        product.product_type = result["product_type"]
         product.google_product_category = result["google_product_category"]
-        product.save(update_fields=["description", "google_product_category"])
-        data = self.get_serializer(product).data
-        data["google_product_category_path"] = result["google_product_category_path"]
-        return Response(data)
+        product.google_product_category_path = result["google_product_category_path"]
+        product.save(
+            update_fields=[
+                "description",
+                "short_description",
+                "meta_title",
+                "meta_description",
+                "bullet_points",
+                "tags",
+                "product_type",
+                "google_product_category",
+                "google_product_category_path",
+            ]
+        )
+        return Response(self.get_serializer(product).data)
+
+
+class TariffViewSet(ModelViewSet):
+    serializer_class = TariffSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
+
+    def get_queryset(self):
+        queryset = Tariff.objects.all()
+        if not is_admin(self.request.user):
+            queryset = queryset.filter(is_active=True)
+        return queryset
+
+
+class UserSubscriptionViewSet(ReadOnlyModelViewSet):
+    serializer_class = UserSubscriptionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return UserSubscription.objects.select_related("tariff").filter(user=self.request.user)
+
+    @action(detail=False, methods=["get"], url_path="me")
+    def me(self, request: Request) -> Response:
+        subscription = get_active_subscription(request.user)
+        if subscription is None:
+            return Response({"detail": "No active subscription."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(self.get_serializer(subscription).data)
+
+    @action(detail=False, methods=["post"], url_path="subscribe")
+    def subscribe(self, request: Request) -> Response:
+        serializer = SubscribeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        subscription = apply_tariff_purchase(request.user, serializer.validated_data["tariff"])
+        return Response(UserSubscriptionSerializer(subscription).data, status=status.HTTP_200_OK)
