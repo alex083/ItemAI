@@ -1,7 +1,17 @@
 from rest_framework import serializers
 
 from .csv_import import EXPORT_FIELDS
-from .models import Integration, Product, ProductImage, Profile, PromptTemplate, User, Tariff, UserSubscription
+from .models import (
+    BackgroundJob,
+    Integration,
+    Product,
+    ProductImage,
+    Profile,
+    PromptTemplate,
+    User,
+    Tariff,
+    UserSubscription,
+)
 
 
 class LoginSerializer(serializers.Serializer):
@@ -356,3 +366,77 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
 
 class SubscribeSerializer(serializers.Serializer):
     tariff = serializers.PrimaryKeyRelatedField(queryset=Tariff.objects.filter(is_active=True))
+
+
+class BackgroundJobSerializer(serializers.ModelSerializer):
+    progress_percent = serializers.IntegerField(read_only=True)
+    profile_title = serializers.CharField(source="profile.title", read_only=True)
+    result_file = serializers.SerializerMethodField()
+    job_type_label = serializers.CharField(source="get_job_type_display", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    stage_label = serializers.CharField(source="get_stage_display", read_only=True)
+
+    class Meta:
+        model = BackgroundJob
+        fields = (
+            "id",
+            "profile",
+            "profile_title",
+            "job_type",
+            "job_type_label",
+            "status",
+            "status_label",
+            "stage",
+            "stage_label",
+            "stage_message",
+            "payload",
+            "product_ids",
+            "total_count",
+            "processed_count",
+            "success_count",
+            "error_count",
+            "progress_percent",
+            "cancel_requested",
+            "error",
+            "result_file",
+            "created_at",
+            "started_at",
+            "finished_at",
+        )
+        read_only_fields = fields
+
+    def get_result_file(self, obj: BackgroundJob) -> str | None:
+        if not obj.result_file:
+            return None
+        return obj.result_file.url
+
+
+class BackgroundJobCreateSerializer(serializers.Serializer):
+    profile = serializers.PrimaryKeyRelatedField(queryset=Profile.objects.all())
+    job_type = serializers.ChoiceField(choices=BackgroundJob.JobType.choices)
+    product_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=True,
+    )
+    select_all = serializers.BooleanField(required=False, default=False)
+    prompt = serializers.CharField(required=False, allow_blank=True)
+    fields = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        allow_empty=False,
+    )
+
+    def validate_profile(self, profile: Profile) -> Profile:
+        request = self.context["request"]
+        if profile.user_id not in (None, request.user.id):
+            raise serializers.ValidationError("You do not have access to this profile.")
+        return profile
+
+    def validate_fields(self, fields: list[str]) -> list[str]:
+        invalid = [f for f in fields if f not in EXPORT_FIELDS]
+        if invalid:
+            raise serializers.ValidationError(
+                f"Invalid export field(s): {', '.join(invalid)}."
+            )
+        return fields

@@ -10,12 +10,13 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { type DragEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Card, Input, Label, Modal, Skeleton, TextArea } from "@heroui/react";
+import { Button, Card, Input, Label, Modal, Skeleton, TextArea, toast } from "@heroui/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { cn } from "cn";
 
 import {
   allowedKeyModes,
+  createJob,
   createProduct,
   deleteProduct,
   exportProductsToCsv,
@@ -27,6 +28,7 @@ import {
   listIntegrations,
   listProducts,
   updateProfile,
+  type BackgroundJobType,
   type Integration,
   type KeyPolicy,
   type Product,
@@ -168,6 +170,10 @@ export function ProfileDetailPage() {
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [showJobForm, setShowJobForm] = useState(false);
+  const [jobType, setJobType] = useState<BackgroundJobType>("generate_copy");
+  const [jobScope, setJobScope] = useState<"selected" | "all">("selected");
+  const [jobPrompt, setJobPrompt] = useState("");
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const filteredProducts = useMemo(() => {
@@ -560,6 +566,35 @@ export function ProfileDetailPage() {
     setSelectedFields(DEFAULT_EXPORT_FIELDS);
   }
 
+  async function onCreateBackgroundJob(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const useAll = jobScope === "all" || selectedIds.length === 0;
+    if (!useAll && selectedIds.length === 0) {
+      setError("Select products or choose All products.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const job = await createJob({
+        profile: profileId,
+        job_type: jobType,
+        select_all: useAll,
+        product_ids: useAll ? undefined : selectedIds,
+        prompt: jobPrompt.trim() || undefined,
+        fields: jobType === "export_csv" ? selectedFields : undefined,
+      });
+      setShowJobForm(false);
+      setJobPrompt("");
+      toast.success(`Job #${job.id} created (${job.status_label}).`);
+      setImportMessage(`Background job #${job.id} queued. Open Jobs to track progress.`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not create background job");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!profile) {
     return error ? <StatusBanner>{error}</StatusBanner> : <ProfileDetailSkeleton />;
   }
@@ -603,6 +638,17 @@ export function ProfileDetailPage() {
             </div>
             {profile.can_edit ? (
               <div className="flex shrink-0 flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  isDisabled={products.length === 0}
+                  onPress={() => {
+                    setShowJobForm(true);
+                    setJobScope(selectedIds.length > 0 ? "selected" : "all");
+                    setError(null);
+                  }}
+                >
+                  Create background job
+                </Button>
                 <Button
                   variant="outline"
                   onPress={() => {
@@ -1220,6 +1266,102 @@ export function ProfileDetailPage() {
         </>
       ) : null}
 
+      {profile.can_edit ? (
+        <Modal.Backdrop
+          isOpen={showJobForm}
+          onOpenChange={(open) => {
+            if (!open) {
+              setShowJobForm(false);
+              setError(null);
+            } else {
+              setShowJobForm(true);
+            }
+          }}
+        >
+          <Modal.Container size="lg" scroll="inside" placement="center">
+            <Modal.Dialog className="glass-panel">
+              <Modal.CloseTrigger />
+              <Modal.Header>
+                <Modal.Heading>Create background job</Modal.Heading>
+              </Modal.Header>
+              <Modal.Body>
+                <form className="flex flex-col gap-5" onSubmit={onCreateBackgroundJob}>
+                  <div className="space-y-2.5">
+                    <Label htmlFor="job-scope">Products</Label>
+                    <NativeSelect
+                      id="job-scope"
+                      value={jobScope}
+                      disabled={busy}
+                      onChange={(event) => setJobScope(event.target.value as "selected" | "all")}
+                    >
+                      <option value="selected" disabled={selectedIds.length === 0}>
+                        Selected ({selectedIds.length})
+                      </option>
+                      <option value="all">All products in profile ({products.length})</option>
+                    </NativeSelect>
+                    <FieldHint>
+                      If nothing is selected, “All products” will be used. Jobs respect per-user and server
+                      concurrency limits.
+                    </FieldHint>
+                  </div>
+                  <div className="space-y-2.5">
+                    <Label htmlFor="job-type">Action</Label>
+                    <NativeSelect
+                      id="job-type"
+                      value={jobType}
+                      disabled={busy}
+                      onChange={(event) => setJobType(event.target.value as BackgroundJobType)}
+                    >
+                      <option value="generate_copy">Generate descriptions</option>
+                      <option value="generate_images">Generate images</option>
+                      <option value="export_csv">Export CSV</option>
+                    </NativeSelect>
+                  </div>
+                  {jobType !== "export_csv" ? (
+                    <div className="space-y-2.5">
+                      <Label htmlFor="job-prompt">Optional prompt override</Label>
+                      <TextArea
+                        id="job-prompt"
+                        fullWidth
+                        rows={3}
+                        value={jobPrompt}
+                        disabled={busy}
+                        onChange={(event) => setJobPrompt(event.target.value)}
+                        placeholder="Leave blank to use the profile prompt"
+                      />
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted">
+                      Export will use the fields currently selected in “Select fields” on this page (
+                      {selectedFields.length} columns).
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2 pb-2">
+                    <Button type="submit" isDisabled={busy || products.length === 0} isPending={busy}>
+                      Create job
+                    </Button>
+                    <Button
+                      variant="outline"
+                      type="button"
+                      isDisabled={busy}
+                      onPress={() => setShowJobForm(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Link
+                      to="/jobs"
+                      className="inline-flex items-center text-sm font-medium text-[var(--accent)] underline-offset-4 hover:underline"
+                    >
+                      Open Jobs
+                    </Link>
+                  </div>
+                </form>
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      ) : null}
+
       {selectedIds.length > 0 ? (
         <div className="fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 pointer-events-none">
           <div className="pointer-events-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-3 rounded-2xl border border-divider bg-background/95 px-4 py-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -1234,6 +1376,17 @@ export function ProfileDetailPage() {
                 onPress={() => void onExport(selectedIds)}
               >
                 Export selected
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                isDisabled={busy}
+                onPress={() => {
+                  setJobScope("selected");
+                  setShowJobForm(true);
+                }}
+              >
+                Queue job
               </Button>
               <Button
                 variant="outline"

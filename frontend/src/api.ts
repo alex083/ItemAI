@@ -484,3 +484,67 @@ export function subscribeToTariff(tariffId: number) {
     body: JSON.stringify({ tariff: tariffId }),
   });
 }
+
+export type BackgroundJobType = "generate_copy" | "generate_images" | "export_csv";
+export type BackgroundJobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export type BackgroundJob = {
+  id: number;
+  profile: number;
+  profile_title: string;
+  job_type: BackgroundJobType;
+  job_type_label: string;
+  status: BackgroundJobStatus;
+  status_label: string;
+  stage: string;
+  stage_label: string;
+  stage_message: string;
+  payload: Record<string, unknown>;
+  product_ids: number[];
+  total_count: number;
+  processed_count: number;
+  success_count: number;
+  error_count: number;
+  progress_percent: number;
+  cancel_requested: boolean;
+  error: string;
+  result_file: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export function listJobs() {
+  return request<BackgroundJob[]>("/api/jobs/");
+}
+
+export function getJob(id: number) {
+  return request<BackgroundJob>(`/api/jobs/${id}/`);
+}
+
+export function createJob(payload: {
+  profile: number;
+  job_type: BackgroundJobType;
+  product_ids?: number[];
+  select_all?: boolean;
+  prompt?: string;
+  fields?: string[];
+}) {
+  return request<BackgroundJob>("/api/jobs/", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function cancelJob(id: number) {
+  return request<BackgroundJob>(`/api/jobs/${id}/cancel/`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteJob(id: number) {
+  return request<void | { detail?: string; job?: BackgroundJob }>(`/api/jobs/${id}/`, {
+    method: "DELETE",
+  });
+}

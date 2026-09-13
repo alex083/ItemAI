@@ -244,3 +244,66 @@ class UserSubscription(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user.username} - {self.tariff.title}"
+
+
+def background_job_result_path(instance: "BackgroundJob", filename: str) -> str:
+    return f"jobs/{instance.user_id}/{uuid.uuid4().hex}_{filename}"
+
+
+class BackgroundJob(models.Model):
+    class JobType(models.TextChoices):
+        GENERATE_COPY = "generate_copy", "Generate descriptions"
+        GENERATE_IMAGES = "generate_images", "Generate images"
+        EXPORT_CSV = "export_csv", "Export CSV"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    class Stage(models.TextChoices):
+        QUEUED = "queued", "Waiting in queue"
+        PREPARING = "preparing", "Preparing"
+        PROCESSING = "processing", "Processing items"
+        FINALIZING = "finalizing", "Finalizing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="background_jobs")
+    profile = models.ForeignKey(Profile, on_delete=models.CASCADE, related_name="background_jobs")
+    job_type = models.CharField(max_length=32, choices=JobType.choices)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.QUEUED, db_index=True)
+    stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.QUEUED)
+    stage_message = models.CharField(max_length=500, blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+    product_ids = models.JSONField(default=list, blank=True)
+    total_count = models.PositiveIntegerField(default=0)
+    processed_count = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    error_count = models.PositiveIntegerField(default=0)
+    cancel_requested = models.BooleanField(default=False)
+    error = models.TextField(blank=True)
+    result_file = models.FileField(upload_to=background_job_result_path, blank=True)
+    celery_task_id = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"Job #{self.pk} {self.job_type} ({self.status})"
+
+    @property
+    def progress_percent(self) -> int:
+        if self.total_count <= 0:
+            if self.status == self.Status.SUCCEEDED:
+                return 100
+            if self.status in {self.Status.QUEUED, self.Status.RUNNING}:
+                return 0
+            return 0
+        return min(100, int(round((self.processed_count / self.total_count) * 100)))

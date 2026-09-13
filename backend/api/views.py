@@ -15,17 +15,20 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.mixins import DestroyModelMixin
+from rest_framework.mixins import CreateModelMixin, DestroyModelMixin, ListModelMixin, RetrieveModelMixin
 from rest_framework.views import APIView
 from rest_framework.viewsets import GenericViewSet, ModelViewSet, ReadOnlyModelViewSet
 
 from .csv_import import CsvImportError, build_product_csv, parse_product_csv
 from .deepseek import DeepSeekError, generate_product_copy
 from .image_gen import ImageGenerationError, build_product_image_prompt, generate_product_image
-from .models import Integration, Product, ProductImage, Profile, PromptTemplate, Tariff, UserSubscription
+from .jobs import create_job, request_cancel, try_dispatch_jobs
+from .models import BackgroundJob, Integration, Product, ProductImage, Profile, PromptTemplate, Tariff, UserSubscription
 from .permissions import IsAdminOrReadOnly, IsOwnerOrReadOnly, is_admin
 from .providers import ProviderError, fetch_available_models
 from .serializers import (
+    BackgroundJobCreateSerializer,
+    BackgroundJobSerializer,
     GenerateProductImageSerializer,
     GenerateProductSerializer,
     IntegrationSerializer,
@@ -519,3 +522,66 @@ class UserSubscriptionViewSet(ReadOnlyModelViewSet):
         serializer.is_valid(raise_exception=True)
         subscription = apply_tariff_purchase(request.user, serializer.validated_data["tariff"])
         return Response(UserSubscriptionSerializer(subscription).data, status=status.HTTP_200_OK)
+
+
+class BackgroundJobViewSet(
+    CreateModelMixin,
+    ListModelMixin,
+    RetrieveModelMixin,
+    DestroyModelMixin,
+    GenericViewSet,
+):
+    serializer_class = BackgroundJobSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return BackgroundJob.objects.select_related("profile").filter(user=self.request.user)
+
+    def create(self, request: Request, *args, **kwargs) -> Response:
+        serializer = BackgroundJobCreateSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            job = create_job(
+                user=request.user,
+                profile=data["profile"],
+                job_type=data["job_type"],
+                product_ids=data.get("product_ids") or [],
+                select_all=bool(data.get("select_all")),
+                prompt=data.get("prompt") or "",
+                fields=data.get("fields"),
+            )
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+
+        try_dispatch_jobs()
+        job.refresh_from_db()
+        return Response(
+            BackgroundJobSerializer(job, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def destroy(self, request: Request, *args, **kwargs) -> Response:
+        job = self.get_object()
+        if job.status in (BackgroundJob.Status.QUEUED, BackgroundJob.Status.RUNNING):
+            request_cancel(job)
+            job.refresh_from_db()
+            if job.status == BackgroundJob.Status.RUNNING:
+                return Response(
+                    {
+                        "detail": "Cancel requested. Job will stop after the current item, then you can delete it.",
+                        "job": BackgroundJobSerializer(job, context={"request": request}).data,
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+        job.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request: Request, pk=None) -> Response:
+        job = self.get_object()
+        try:
+            job = request_cancel(job)
+        except ValidationError as exc:
+            return Response(exc.detail, status=status.HTTP_400_BAD_REQUEST)
+        return Response(BackgroundJobSerializer(job, context={"request": request}).data)

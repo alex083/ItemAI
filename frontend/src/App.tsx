@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { useAuth } from "./auth";
 import { IntegrationsPage } from "./IntegrationsPage";
+import { JobsPage } from "./JobsPage";
 import { LandingPage } from "./LandingPage";
 import { Layout } from "./Layout";
 import { LoginPage } from "./LoginPage";
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/profiles/:id/products/:productId" element={<ProductDetailPage />} />
         <Route path="/tariffs" element={<TariffsPage />} />
         <Route path="/prompts" element={<PromptsPage />} />
+        <Route path="/jobs" element={<JobsPage />} />
         <Route path="/integrations" element={<IntegrationsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

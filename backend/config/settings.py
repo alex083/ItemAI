@@ -121,3 +121,16 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
 }
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+
+# Background job concurrency limits
+JOB_MAX_CONCURRENT_GLOBAL = int(os.environ.get("JOB_MAX_CONCURRENT_GLOBAL", "2"))
+JOB_MAX_CONCURRENT_PER_USER = int(os.environ.get("JOB_MAX_CONCURRENT_PER_USER", "1"))
+JOB_MAX_QUEUED_PER_USER = int(os.environ.get("JOB_MAX_QUEUED_PER_USER", "10"))

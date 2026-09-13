@@ -1,6 +1,16 @@
 from django.contrib import admin
 
-from .models import Integration, Product, ProductImage, Profile, PromptTemplate, Tariff, User, UserSubscription
+from .models import (
+    BackgroundJob,
+    Integration,
+    Product,
+    ProductImage,
+    Profile,
+    PromptTemplate,
+    Tariff,
+    User,
+    UserSubscription,
+)
 
 
 @admin.register(User)
@@ -104,3 +114,22 @@ class UserSubscriptionAdmin(admin.ModelAdmin):
     )
     list_filter = ("keypolicy", "is_active")
     search_fields = ("user__username", "tariff__title")
+
+
+@admin.register(BackgroundJob)
+class BackgroundJobAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user",
+        "profile",
+        "job_type",
+        "status",
+        "stage",
+        "processed_count",
+        "total_count",
+        "created_at",
+        "finished_at",
+    )
+    list_filter = ("job_type", "status", "stage")
+    search_fields = ("user__username", "profile__title", "stage_message", "error")
+    readonly_fields = ("created_at", "started_at", "finished_at", "celery_task_id")

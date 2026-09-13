@@ -9,7 +9,7 @@ import {
   IconUpload,
 } from "@tabler/icons-react";
 import { type DragEvent, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Dropdown, Input, Label, Tabs, TextArea, toast } from "@heroui/react";
+import { Alert, Button, Card, Dropdown, Input, Label, TextArea, toast } from "@heroui/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { cn } from "cn";
 
@@ -44,7 +44,15 @@ type FormState = {
   group_id: string;
 };
 
-type FormTab = "general" | "seo" | "ecommerce" | "identifiers";
+type ProductTab = "photos" | "general" | "seo" | "ecommerce" | "identifiers";
+
+const PRODUCT_TABS: { value: ProductTab; label: string }[] = [
+  { value: "photos", label: "Photos" },
+  { value: "general", label: "General" },
+  { value: "seo", label: "SEO" },
+  { value: "ecommerce", label: "Catalog" },
+  { value: "identifiers", label: "IDs" },
+];
 
 function productToForm(product: Product): FormState {
   const bullets = Array.isArray(product.bullet_points) ? product.bullet_points : [];
@@ -160,7 +168,7 @@ export function ProductDetailPage() {
   const [uploadBusy, setUploadBusy] = useState(false);
   const [imageGenPrompt, setImageGenPrompt] = useState("");
   const [imageDragActive, setImageDragActive] = useState(false);
-  const [activeTab, setActiveTab] = useState<FormTab>("general");
+  const [activeTab, setActiveTab] = useState<ProductTab>("photos");
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const isDirty = useMemo(() => {
@@ -402,169 +410,184 @@ export function ProductDetailPage() {
         ) : null}
       </div>
 
-      <Card className="glass-panel fade-in rounded-3xl p-1">
-        <Card.Header className="flex flex-wrap items-center justify-between gap-3 px-6 pt-6">
-          <div>
-            <Card.Title>Images</Card.Title>
-            <Card.Description>
-              {imageGenAllowed
-                ? "Upload a real product photo first, then Generate to create a studio version of that same product."
-                : "Your plan does not include image generation. You can still upload photos."}
-            </Card.Description>
-          </div>
-          {canEdit ? (
-            <div className="flex flex-wrap gap-2">
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    void onUploadImage(file);
-                  }
-                }}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                isDisabled={uploadBusy}
-                onPress={() => imageInputRef.current?.click()}
-              >
-                {uploadBusy ? <IconLoader2 className="size-4 animate-spin" /> : <IconUpload className="size-4" />}
-                Upload
-              </Button>
-              <Button
-                size="sm"
-                isDisabled={imageBusy || !imageGenAllowed || product.images.length === 0}
-                onPress={() => void onGenerateImage()}
-              >
-                {imageBusy ? <IconLoader2 className="size-4 animate-spin" /> : <IconPhoto className="size-4" />}
-                Generate image
-              </Button>
-            </div>
-          ) : null}
-        </Card.Header>
-        <Card.Content className="px-6 pb-6">
-          {canEdit && imageGenAllowed ? (
-            <div className="mb-5 space-y-2.5">
-              <Label htmlFor="image-gen-prompt">Image prompt (optional)</Label>
-              <TextArea
-                id="image-gen-prompt"
-                fullWidth
-                variant="secondary"
-                rows={3}
-                value={imageGenPrompt}
-                disabled={imageBusy}
-                placeholder="e.g. White background, soft studio light, keep the product exactly as in the photo"
-                onChange={(event) => setImageGenPrompt(event.target.value)}
-              />
-              <p className="text-sm text-muted">
-                Overrides the profile image prompt for this generation. Uses the primary/uploaded photo as reference.
-              </p>
-            </div>
-          ) : null}
-
-          {canEdit ? (
-            <div
-              className={cn(
-                "mb-5 rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
-                imageDragActive
-                  ? "border-[var(--accent)] bg-[var(--accent)]/5"
-                  : "border-divider bg-surface-secondary/60",
-                uploadBusy && "pointer-events-none opacity-70",
-              )}
-              onDragOver={onImageDragOver}
-              onDragLeave={onImageDragLeave}
-              onDrop={onImageDrop}
-            >
-              <IconUpload className="mx-auto size-7 text-muted" />
-              <p className="mt-2 text-sm font-medium">
-                {imageDragActive ? "Drop image to upload" : "Drag & drop a product photo here"}
-              </p>
-              <p className="mt-1 text-xs text-muted">or use the Upload button above</p>
-            </div>
-          ) : null}
-
-          {product.images.length === 0 && !uploadBusy ? (
-            <p className="text-sm text-muted">
-              No images yet. Upload a real product photo, then use Generate image to improve it for your store.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-              {product.images.map((image) => (
-                <div
-                  key={image.id}
-                  className="relative aspect-square overflow-hidden rounded-2xl border border-divider bg-surface-secondary"
-                >
-                  <img src={image.image} alt={product.title} className="h-full w-full object-cover" />
-                  {image.is_primary ? (
-                    <span className="absolute left-2 top-2 rounded-full bg-accent/90 px-2 py-0.5 text-xs font-medium text-accent-foreground">
-                      Primary
-                    </span>
-                  ) : null}
-                  {canEdit ? (
-                    <ImageActionsMenu
-                      image={image}
-                      busy={busy}
-                      onDownload={() =>
-                        void onDownloadImage(
-                          image.image,
-                          image.image.split("/").pop() || `${product.title}-${image.id}.png`,
-                        )
-                      }
-                      onSetPrimary={() => void onSetPrimaryImage(image.id)}
-                      onDelete={() => void onDeleteImage(image.id)}
-                    />
-                  ) : null}
-                </div>
-              ))}
-              {uploadBusy ? (
-                <div className="flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-divider bg-surface-secondary">
-                  <IconLoader2 className="size-6 animate-spin text-muted" />
-                  <span className="text-xs text-muted">Uploading…</span>
-                </div>
-              ) : null}
-            </div>
-          )}
-        </Card.Content>
-      </Card>
-
       <form onSubmit={onSave}>
         <Card className="glass-panel fade-in rounded-3xl p-1">
-          <Card.Header className="px-6 pt-6">
-            <Card.Title>Product details</Card.Title>
-            <Card.Description>Edit fields by section — Save stays available under every tab.</Card.Description>
-          </Card.Header>
-          <Card.Content className="px-6 pb-6">
-            <Tabs
-              className="w-full"
-              selectedKey={activeTab}
-              onSelectionChange={(key) => setActiveTab(String(key) as FormTab)}
+          <Card.Header className="space-y-4 px-6 pt-6">
+            <div>
+              <Card.Title>Product</Card.Title>
+              <Card.Description>
+                Photos, copy, SEO, catalog fields, and store identifiers — switch sections without scrolling a long form.
+              </Card.Description>
+            </div>
+            <div
+              className="flex w-full gap-1 overflow-x-auto rounded-xl border border-divider bg-background p-1"
+              role="tablist"
+              aria-label="Product sections"
             >
-              <Tabs.ListContainer className="mb-5">
-                <Tabs.List aria-label="Product detail sections" className="flex w-full flex-wrap gap-1">
-                  <Tabs.Tab id="general" className="px-3 py-2 text-sm">
-                    General
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="seo" className="px-3 py-2 text-sm">
-                    SEO
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="ecommerce" className="px-3 py-2 text-sm">
-                    E-commerce & Categories
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                  <Tabs.Tab id="identifiers" className="px-3 py-2 text-sm">
-                    Identifiers
-                    <Tabs.Indicator />
-                  </Tabs.Tab>
-                </Tabs.List>
-              </Tabs.ListContainer>
+              {PRODUCT_TABS.map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab.value}
+                  className={cn(
+                    "shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap",
+                    activeTab === tab.value
+                      ? "bg-foreground text-background"
+                      : "text-muted hover:text-foreground",
+                  )}
+                  onClick={() => setActiveTab(tab.value)}
+                >
+                  {tab.label}
+                  {tab.value === "photos" && product.images.length > 0
+                    ? ` (${product.images.length})`
+                    : null}
+                </button>
+              ))}
+            </div>
+          </Card.Header>
 
-              <Tabs.Panel id="general" className="grid gap-5 md:grid-cols-2">
+          <Card.Content className="px-6 pb-6">
+            {activeTab === "photos" ? (
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <p className="max-w-xl text-sm text-muted">
+                    {imageGenAllowed
+                      ? "Upload a real product photo first, then Generate to create a studio version of that same product."
+                      : "Your plan does not include image generation. You can still upload photos."}
+                  </p>
+                  {canEdit ? (
+                    <div className="flex flex-wrap gap-2">
+                      <input
+                        ref={imageInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) {
+                            void onUploadImage(file);
+                          }
+                        }}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        type="button"
+                        isDisabled={uploadBusy}
+                        onPress={() => imageInputRef.current?.click()}
+                      >
+                        {uploadBusy ? (
+                          <IconLoader2 className="size-4 animate-spin" />
+                        ) : (
+                          <IconUpload className="size-4" />
+                        )}
+                        Upload
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        isDisabled={imageBusy || !imageGenAllowed || product.images.length === 0}
+                        onPress={() => void onGenerateImage()}
+                      >
+                        {imageBusy ? (
+                          <IconLoader2 className="size-4 animate-spin" />
+                        ) : (
+                          <IconPhoto className="size-4" />
+                        )}
+                        Generate image
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                {canEdit && imageGenAllowed ? (
+                  <div className="space-y-2.5">
+                    <Label htmlFor="image-gen-prompt">Image prompt (optional)</Label>
+                    <TextArea
+                      id="image-gen-prompt"
+                      fullWidth
+                      variant="secondary"
+                      rows={3}
+                      value={imageGenPrompt}
+                      disabled={imageBusy}
+                      placeholder="e.g. White background, soft studio light, keep the product exactly as in the photo"
+                      onChange={(event) => setImageGenPrompt(event.target.value)}
+                    />
+                    <p className="text-sm text-muted">
+                      Overrides the profile image prompt for this generation. Uses the primary/uploaded photo as
+                      reference.
+                    </p>
+                  </div>
+                ) : null}
+
+                {canEdit ? (
+                  <div
+                    className={cn(
+                      "rounded-2xl border border-dashed px-4 py-8 text-center transition-colors",
+                      imageDragActive
+                        ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                        : "border-divider bg-surface-secondary/60",
+                      uploadBusy && "pointer-events-none opacity-70",
+                    )}
+                    onDragOver={onImageDragOver}
+                    onDragLeave={onImageDragLeave}
+                    onDrop={onImageDrop}
+                  >
+                    <IconUpload className="mx-auto size-7 text-muted" />
+                    <p className="mt-2 text-sm font-medium">
+                      {imageDragActive ? "Drop image to upload" : "Drag & drop a product photo here"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">or use the Upload button above</p>
+                  </div>
+                ) : null}
+
+                {product.images.length === 0 && !uploadBusy ? (
+                  <p className="text-sm text-muted">
+                    No images yet. Upload a real product photo, then use Generate image to improve it for your store.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                    {product.images.map((image) => (
+                      <div
+                        key={image.id}
+                        className="relative aspect-square overflow-hidden rounded-2xl border border-divider bg-surface-secondary"
+                      >
+                        <img src={image.image} alt={product.title} className="h-full w-full object-cover" />
+                        {image.is_primary ? (
+                          <span className="absolute left-2 top-2 rounded-full bg-accent/90 px-2 py-0.5 text-xs font-medium text-accent-foreground">
+                            Primary
+                          </span>
+                        ) : null}
+                        {canEdit ? (
+                          <ImageActionsMenu
+                            image={image}
+                            busy={busy}
+                            onDownload={() =>
+                              void onDownloadImage(
+                                image.image,
+                                image.image.split("/").pop() || `${product.title}-${image.id}.png`,
+                              )
+                            }
+                            onSetPrimary={() => void onSetPrimaryImage(image.id)}
+                            onDelete={() => void onDeleteImage(image.id)}
+                          />
+                        ) : null}
+                      </div>
+                    ))}
+                    {uploadBusy ? (
+                      <div className="flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-divider bg-surface-secondary">
+                        <IconLoader2 className="size-6 animate-spin text-muted" />
+                        <span className="text-xs text-muted">Uploading…</span>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {activeTab === "general" ? (
+              <div className="grid gap-5 md:grid-cols-2">
                 <FieldBlock label="Title" htmlFor="title" className="md:col-span-2">
                   <Input
                     id="title"
@@ -610,9 +633,11 @@ export function ProductDetailPage() {
                     onChange={(event) => setField("description", event.target.value)}
                   />
                 </FieldBlock>
-              </Tabs.Panel>
+              </div>
+            ) : null}
 
-              <Tabs.Panel id="seo" className="grid gap-5 md:grid-cols-2">
+            {activeTab === "seo" ? (
+              <div className="grid gap-5 md:grid-cols-2">
                 <FieldBlock label="Meta title" htmlFor="meta_title" className="md:col-span-2">
                   <Input
                     id="meta_title"
@@ -634,9 +659,11 @@ export function ProductDetailPage() {
                     onChange={(event) => setField("meta_description", event.target.value)}
                   />
                 </FieldBlock>
-              </Tabs.Panel>
+              </div>
+            ) : null}
 
-              <Tabs.Panel id="ecommerce" className="grid gap-5 md:grid-cols-2">
+            {activeTab === "ecommerce" ? (
+              <div className="grid gap-5 md:grid-cols-2">
                 <FieldBlock label="Product type" htmlFor="product_type">
                   <Input
                     id="product_type"
@@ -678,9 +705,11 @@ export function ProductDetailPage() {
                     onChange={(event) => setField("google_product_category_path", event.target.value)}
                   />
                 </FieldBlock>
-              </Tabs.Panel>
+              </div>
+            ) : null}
 
-              <Tabs.Panel id="identifiers" className="grid gap-5 md:grid-cols-2">
+            {activeTab === "identifiers" ? (
+              <div className="grid gap-5 md:grid-cols-2">
                 <FieldBlock label="Store ID" htmlFor="external_id">
                   <Input
                     id="external_id"
@@ -711,34 +740,36 @@ export function ProductDetailPage() {
                     onChange={(event) => setField("group_id", event.target.value)}
                   />
                 </FieldBlock>
-              </Tabs.Panel>
-            </Tabs>
-
-            {canEdit ? (
-              <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-5">
-                <Button type="submit" isDisabled={busy || !isDirty} isPending={busy}>
-                  {busy ? <IconLoader2 className="animate-spin" /> : null}
-                  Save changes
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  isDisabled={busy}
-                  onPress={() => {
-                    if (isDirty) {
-                      setForm(productToForm(product));
-                      toast.info("Changes discarded.");
-                      return;
-                    }
-                    navigate(`/profiles/${profileId}`);
-                  }}
-                >
-                  {isDirty ? "Discard changes" : "Cancel"}
-                </Button>
               </div>
-            ) : (
-              <p className="mt-6 text-sm text-muted">Shared product. View only.</p>
-            )}
+            ) : null}
+
+            {activeTab !== "photos" ? (
+              canEdit ? (
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-5">
+                  <Button type="submit" isDisabled={busy || !isDirty} isPending={busy}>
+                    {busy ? <IconLoader2 className="animate-spin" /> : null}
+                    Save changes
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    isDisabled={busy}
+                    onPress={() => {
+                      if (isDirty) {
+                        setForm(productToForm(product));
+                        toast.info("Changes discarded.");
+                        return;
+                      }
+                      navigate(`/profiles/${profileId}`);
+                    }}
+                  >
+                    {isDirty ? "Discard changes" : "Cancel"}
+                  </Button>
+                </div>
+              ) : (
+                <p className="mt-6 text-sm text-muted">Shared product. View only.</p>
+              )
+            ) : null}
           </Card.Content>
         </Card>
       </form>

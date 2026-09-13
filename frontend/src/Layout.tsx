@@ -34,6 +34,7 @@ export function Layout() {
           </NavLink>
           <nav className="hidden items-center gap-1.5 md:flex">
             <NavItem to="/profiles">Profiles</NavItem>
+            <NavItem to="/jobs">Jobs</NavItem>
             <NavItem to="/tariffs">Tariffs</NavItem>
             <NavItem to="/prompts">Prompt templates</NavItem>
             {user?.is_staff ? <NavItem to="/integrations">Integrations</NavItem> : null}
@@ -44,6 +45,7 @@ export function Layout() {
         </div>
         <div className="mx-auto flex max-w-6xl gap-1.5 overflow-x-auto px-5 pb-3.5 md:hidden md:px-6">
           <NavItem to="/profiles">Profiles</NavItem>
+          <NavItem to="/jobs">Jobs</NavItem>
           <NavItem to="/tariffs">Tariffs</NavItem>
           <NavItem to="/prompts">Prompt templates</NavItem>
           {user?.is_staff ? <NavItem to="/integrations">Integrations</NavItem> : null}

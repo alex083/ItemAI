@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    BackgroundJobViewSet,
     IntegrationViewSet,
     LoginView,
     MeView,
@@ -23,6 +24,7 @@ router.register("products", ProductViewSet, basename="product")
 router.register("product-images", ProductImageViewSet, basename="product-image")
 router.register("tariffs", TariffViewSet, basename="tariff")
 router.register("subscriptions", UserSubscriptionViewSet, basename="subscription")
+router.register("jobs", BackgroundJobViewSet, basename="job")
 
 urlpatterns = [
     path("health/", health, name="health"),
