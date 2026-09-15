@@ -18,6 +18,7 @@ import {
   type ProfileKeyMode,
   type ProviderModel,
 } from "./api";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldHint } from "@/components/field-hint";
 import { NativeSelect } from "@/components/native-select";
 import { PageHeader } from "@/components/page-header";
@@ -52,6 +53,7 @@ export function ProfilesPage() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null);
 
   const keyModeOptions = allowedKeyModes(keyPolicy);
 
@@ -149,11 +151,13 @@ export function ProfilesPage() {
     }
   }
 
-  async function onDelete(id: number) {
+  async function onConfirmDelete() {
+    if (!deleteTarget) return;
     setBusy(true);
     setError(null);
     try {
-      await deleteProfile(id);
+      await deleteProfile(deleteTarget.id);
+      setDeleteTarget(null);
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not delete profile");
@@ -418,6 +422,18 @@ export function ProfilesPage() {
         </Modal.Container>
       </Modal.Backdrop>
 
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete "${deleteTarget?.title ?? ""}"?`}
+        description="This permanently deletes the profile and every product, image, and description inside it. This cannot be undone."
+        confirmLabel="Delete profile"
+        busy={busy}
+        onConfirm={() => void onConfirmDelete()}
+      />
+
       {profiles.length === 0 ? (
         <p className="text-sm text-muted">No profiles yet. Click “Create profile”.</p>
       ) : (
@@ -436,7 +452,7 @@ export function ProfilesPage() {
                     className="absolute right-3 top-3 z-10 opacity-60 transition-all duration-200 hover:bg-danger/10 hover:text-danger hover:opacity-100"
                     aria-label={`Delete ${profile.title}`}
                     isDisabled={busy}
-                    onPress={() => void onDelete(profile.id)}
+                    onPress={() => setDeleteTarget(profile)}
                   >
                     <IconTrash className="size-4" />
                   </Button>

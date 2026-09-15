@@ -13,6 +13,7 @@ import {
   type ProviderModel,
 } from "./api";
 import { useAuth } from "./auth";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldHint } from "@/components/field-hint";
 import { NativeSelect } from "@/components/native-select";
 import { PageHeader } from "@/components/page-header";
@@ -33,6 +34,7 @@ export function IntegrationsPage() {
   const [loadingModels, setLoadingModels] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Integration | null>(null);
 
   function resetForm() {
     setName("");
@@ -133,7 +135,9 @@ export function IntegrationsPage() {
     setError(null);
   }
 
-  async function onDelete(id: number) {
+  async function onConfirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
     setBusy(true);
     setError(null);
     try {
@@ -141,6 +145,7 @@ export function IntegrationsPage() {
       if (editingId === id) {
         resetForm();
       }
+      setDeleteTarget(null);
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not delete integration");
@@ -322,6 +327,18 @@ export function IntegrationsPage() {
         </Modal.Container>
       </Modal.Backdrop>
 
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete "${deleteTarget?.name ?? ""}"?`}
+        description="Profiles using this integration in platform-key mode will stop working until they switch to another integration. This cannot be undone."
+        confirmLabel="Delete integration"
+        busy={busy}
+        onConfirm={() => void onConfirmDelete()}
+      />
+
       {integrations.length === 0 ? (
         <p className="text-sm text-muted">No integrations yet. Click “Create integration”.</p>
       ) : (
@@ -376,7 +393,7 @@ export function IntegrationsPage() {
                     aria-label={`Delete ${integration.name}`}
                     className="hover:bg-danger/10 hover:text-danger"
                     isDisabled={busy}
-                    onPress={() => void onDelete(integration.id)}
+                    onPress={() => setDeleteTarget(integration)}
                   >
                     <IconTrash className="size-4" />
                   </Button>

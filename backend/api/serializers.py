@@ -85,11 +85,26 @@ def _request_user_id(serializer) -> int | None:
 
 class PromptTemplateSerializer(serializers.ModelSerializer):
     can_edit = serializers.SerializerMethodField()
+    prompt_type_label = serializers.CharField(source="get_prompt_type_display", read_only=True)
 
     class Meta:
         model = PromptTemplate
-        fields = ("id", "slug", "title", "body", "owner", "can_edit")
-        read_only_fields = ("id", "slug", "owner", "can_edit")
+        fields = (
+            "id",
+            "slug",
+            "title",
+            "body",
+            "prompt_type",
+            "prompt_type_label",
+            "category",
+            "owner",
+            "can_edit",
+        )
+        read_only_fields = ("id", "slug", "owner", "can_edit", "prompt_type_label")
+        extra_kwargs = {
+            "prompt_type": {"required": False},
+            "category": {"required": False, "allow_blank": True},
+        }
 
     def get_can_edit(self, obj: PromptTemplate) -> bool:
         return obj.owner_id is not None and obj.owner_id == _request_user_id(self)

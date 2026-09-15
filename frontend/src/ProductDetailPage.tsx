@@ -26,6 +26,7 @@ import {
   type Product,
   type ProductImage,
 } from "./api";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { StatusBanner } from "@/components/status-banner";
 
 type FormState = {
@@ -169,6 +170,8 @@ export function ProductDetailPage() {
   const [imageGenPrompt, setImageGenPrompt] = useState("");
   const [imageDragActive, setImageDragActive] = useState(false);
   const [activeTab, setActiveTab] = useState<ProductTab>("photos");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteImageTarget, setDeleteImageTarget] = useState<ProductImage | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const isDirty = useMemo(() => {
@@ -260,7 +263,7 @@ export function ProductDetailPage() {
     }
   }
 
-  async function onDelete() {
+  async function onConfirmDeleteProduct() {
     setBusy(true);
     try {
       await deleteProduct(idNum);
@@ -304,10 +307,12 @@ export function ProductDetailPage() {
     }
   }
 
-  async function onDeleteImage(imageId: number) {
+  async function onConfirmDeleteImage() {
+    if (!deleteImageTarget) return;
     setBusy(true);
     try {
-      await deleteProductImage(imageId);
+      await deleteProductImage(deleteImageTarget.id);
+      setDeleteImageTarget(null);
       await refresh();
       notifySuccess("Image deleted.");
     } catch (err: unknown) {
@@ -403,14 +408,14 @@ export function ProductDetailPage() {
               {busy ? <IconLoader2 className="animate-spin" /> : null}
               Generate content
             </Button>
-            <Button variant="danger-soft" size="sm" isDisabled={busy} onPress={() => void onDelete()}>
+            <Button variant="danger-soft" size="sm" isDisabled={busy} onPress={() => setShowDeleteConfirm(true)}>
               Delete
             </Button>
           </div>
         ) : null}
       </div>
 
-      <form onSubmit={onSave}>
+      <form id="product-edit-form" onSubmit={onSave}>
         <Card className="glass-panel fade-in rounded-3xl p-1">
           <Card.Header className="space-y-4 px-6 pt-6">
             <div>
@@ -570,7 +575,7 @@ export function ProductDetailPage() {
                               )
                             }
                             onSetPrimary={() => void onSetPrimaryImage(image.id)}
-                            onDelete={() => void onDeleteImage(image.id)}
+                            onDelete={() => setDeleteImageTarget(image)}
                           />
                         ) : null}
                       </div>
@@ -743,8 +748,8 @@ export function ProductDetailPage() {
               </div>
             ) : null}
 
-            {activeTab !== "photos" ? (
-              canEdit ? (
+            {canEdit ? (
+              activeTab !== "photos" || isDirty ? (
                 <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-divider pt-5">
                   <Button type="submit" isDisabled={busy || !isDirty} isPending={busy}>
                     {busy ? <IconLoader2 className="animate-spin" /> : null}
@@ -766,9 +771,9 @@ export function ProductDetailPage() {
                     {isDirty ? "Discard changes" : "Cancel"}
                   </Button>
                 </div>
-              ) : (
-                <p className="mt-6 text-sm text-muted">Shared product. View only.</p>
-              )
+              ) : null
+            ) : activeTab !== "photos" ? (
+              <p className="mt-6 text-sm text-muted">Shared product. View only.</p>
             ) : null}
           </Card.Content>
         </Card>
@@ -782,9 +787,40 @@ export function ProductDetailPage() {
               <Alert.Title>Unsaved changes</Alert.Title>
               <Alert.Description>Save before leaving this page or your edits will be lost.</Alert.Description>
             </Alert.Content>
+            <Button
+              form="product-edit-form"
+              type="submit"
+              size="sm"
+              isDisabled={busy}
+              isPending={busy}
+            >
+              Save now
+            </Button>
           </Alert>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        isOpen={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        title={`Delete "${product.title}"?`}
+        description="This permanently removes the product, its description, and its images. This cannot be undone."
+        confirmLabel="Delete product"
+        busy={busy}
+        onConfirm={() => void onConfirmDeleteProduct()}
+      />
+
+      <ConfirmDialog
+        isOpen={deleteImageTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteImageTarget(null);
+        }}
+        title="Delete this image?"
+        description="This permanently removes the image from the product. This cannot be undone."
+        confirmLabel="Delete image"
+        busy={busy}
+        onConfirm={() => void onConfirmDeleteImage()}
+      />
     </div>
   );
 }

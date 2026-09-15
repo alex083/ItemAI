@@ -11,6 +11,7 @@ import {
   type BackgroundJob,
   type BackgroundJobStatus,
 } from "./api";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
 
@@ -39,6 +40,7 @@ export function JobsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<BackgroundJob | null>(null);
 
   async function refresh() {
     const data = await listJobs();
@@ -84,11 +86,14 @@ export function JobsPage() {
     }
   }
 
-  async function onDelete(jobId: number) {
+  async function onConfirmDelete() {
+    if (!deleteTarget) return;
+    const jobId = deleteTarget.id;
     setBusyId(jobId);
     setError(null);
     try {
       await deleteJob(jobId);
+      setDeleteTarget(null);
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not delete job");
@@ -105,6 +110,18 @@ export function JobsPage() {
         description="Background tasks for descriptions, images, and CSV exports. Active jobs update automatically."
       />
       {error ? <StatusBanner>{error}</StatusBanner> : null}
+
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete job #${deleteTarget?.id ?? ""}?`}
+        description="This removes the job from history. Any generated descriptions, images, or exported CSV already produced are kept."
+        confirmLabel="Delete job"
+        busy={deleteTarget !== null && busyId === deleteTarget.id}
+        onConfirm={() => void onConfirmDelete()}
+      />
 
       <div
         className="flex w-full gap-1 overflow-x-auto rounded-xl border border-divider bg-background p-1"
@@ -196,7 +213,7 @@ export function JobsPage() {
                         variant="danger-soft"
                         size="sm"
                         isDisabled={busyId === job.id}
-                        onPress={() => void onDelete(job.id)}
+                        onPress={() => setDeleteTarget(job)}
                       >
                         {busyId === job.id ? (
                           <IconLoader2 className="size-4 animate-spin" />

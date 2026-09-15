@@ -20,14 +20,20 @@ class User(AbstractUser):
 
 
 class PromptTemplate(models.Model):
+    class PromptType(models.TextChoices):
+        DESCRIPTION = "description", "Description"
+        IMAGE = "image", "Image"
+
     slug = models.SlugField(unique=True)
     title = models.CharField(max_length=200)
     body = models.TextField()
+    prompt_type = models.CharField(max_length=20, choices=PromptType.choices, default=PromptType.DESCRIPTION)
+    category = models.CharField(max_length=100, blank=True)
     owner = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name="prompt_templates")
     is_active = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ["title"]
+        ordering = ["category", "title"]
 
     def __str__(self) -> str:
         return self.title

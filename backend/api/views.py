@@ -164,9 +164,16 @@ class PromptTemplateViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwnerOrReadOnly]
 
     def get_queryset(self):
-        return PromptTemplate.objects.filter(is_active=True).filter(
+        queryset = PromptTemplate.objects.filter(is_active=True).filter(
             Q(owner=self.request.user) | Q(owner__isnull=True)
         )
+        prompt_type = self.request.query_params.get("prompt_type")
+        if prompt_type:
+            queryset = queryset.filter(prompt_type=prompt_type)
+        category = self.request.query_params.get("category")
+        if category:
+            queryset = queryset.filter(category__iexact=category)
+        return queryset
 
     def perform_create(self, serializer):
         title = serializer.validated_data["title"]

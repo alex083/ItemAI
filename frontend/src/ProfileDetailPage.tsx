@@ -10,7 +10,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { type DragEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Card, Input, Label, Modal, Skeleton, TextArea, toast } from "@heroui/react";
+import { Button, Card, Dropdown, Input, Label, Modal, Skeleton, TextArea, toast } from "@heroui/react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { cn } from "cn";
 
@@ -27,15 +27,20 @@ import {
   listAvailableModels,
   listIntegrations,
   listProducts,
+  listPromptTemplates,
   updateProfile,
+  PROMPT_TYPE_LABELS,
   type BackgroundJobType,
   type Integration,
   type KeyPolicy,
   type Product,
   type Profile,
   type ProfileKeyMode,
+  type PromptTemplate,
+  type PromptType,
   type ProviderModel,
 } from "./api";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FieldHint } from "@/components/field-hint";
 import { NativeSelect } from "@/components/native-select";
 import { StatusBanner } from "@/components/status-banner";
@@ -155,6 +160,7 @@ export function ProfileDetailPage() {
   const [externalId, setExternalId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [imageModel, setImageModel] = useState("");
   const [models, setModels] = useState<ProviderModel[]>([]);
@@ -174,6 +180,7 @@ export function ProfileDetailPage() {
   const [jobType, setJobType] = useState<BackgroundJobType>("generate_copy");
   const [jobScope, setJobScope] = useState<"selected" | "all">("selected");
   const [jobPrompt, setJobPrompt] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
 
   const filteredProducts = useMemo(() => {
@@ -270,13 +277,15 @@ export function ProfileDetailPage() {
   }
 
   async function refresh() {
-    const [nextProfile, allProducts, nextIntegrations] = await Promise.all([
+    const [nextProfile, allProducts, nextIntegrations, nextTemplates] = await Promise.all([
       getProfile(profileId),
       listProducts(),
       listIntegrations(),
+      listPromptTemplates(),
     ]);
     setProfile(nextProfile);
     setIntegrations(nextIntegrations);
+    setPromptTemplates(nextTemplates);
     setSelectedModel(nextProfile.model || "");
     setImageModel(nextProfile.image_model || "");
     setPrompt(nextProfile.Prompt);
@@ -309,6 +318,22 @@ export function ProfileDetailPage() {
       setError(err instanceof Error ? err.message : "Could not open profile");
     });
   }, [profileId]);
+
+  function templateOptionsFor(target: PromptType): PromptTemplate[] {
+    const byTitle = (a: PromptTemplate, b: PromptTemplate) => a.title.localeCompare(b.title);
+    const primary = promptTemplates.filter((template) => template.prompt_type === target).sort(byTitle);
+    const secondary = promptTemplates.filter((template) => template.prompt_type !== target).sort(byTitle);
+    return [...primary, ...secondary];
+  }
+
+  function onInsertTemplate(target: PromptType, template: PromptTemplate) {
+    if (target === "image") {
+      setImagePrompt(template.body);
+    } else {
+      setPrompt(template.body);
+    }
+    toast.success(`Inserted "${template.title}". Click "Save prompts" to apply.`);
+  }
 
   async function onSavePrompt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -501,11 +526,14 @@ export function ProfileDetailPage() {
     }
   }
 
-  async function onDelete(productId: number) {
+  async function onConfirmDelete() {
+    if (!deleteTarget) return;
     setBusy(true);
     setError(null);
     try {
-      await deleteProduct(productId);
+      await deleteProduct(deleteTarget.id);
+      setSelectedIds((current) => current.filter((itemId) => itemId !== deleteTarget.id));
+      setDeleteTarget(null);
       await refresh();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not delete product");
@@ -850,7 +878,7 @@ export function ProfileDetailPage() {
                                   aria-label={`Delete ${product.title}`}
                                   className="hover:bg-danger/10 hover:text-danger"
                                   isDisabled={busy}
-                                  onPress={() => void onDelete(product.id)}
+                                  onPress={() => setDeleteTarget(product)}
                                 >
                                   <IconTrash className="size-4" />
                                 </Button>
@@ -1056,7 +1084,37 @@ export function ProfileDetailPage() {
                   {settingsExpanded ? (
                     <>
                       <div className="space-y-2.5">
-                        <Label htmlFor="profile-prompt">Text prompt</Label>
+                        <div className="flex items-center justify-between gap-2">
+                          <Label htmlFor="profile-prompt">Text prompt</Label>
+                          {promptTemplates.length > 0 ? (
+                            <Dropdown>
+                              <Button variant="ghost" size="sm" type="button" isDisabled={busy}>
+                                Insert template
+                                <IconChevronDown className="size-3.5" />
+                              </Button>
+                              <Dropdown.Popover placement="bottom end">
+                                <Dropdown.Menu
+                                  aria-label="Insert a saved template into the text prompt"
+                                  onAction={(key) => {
+                                    const template = promptTemplates.find((item) => String(item.id) === key);
+                                    if (template) onInsertTemplate("description", template);
+                                  }}
+                                >
+                                  {templateOptionsFor("description").map((template) => (
+                                    <Dropdown.Item key={template.id} id={String(template.id)} textValue={template.title}>
+                                      <Label>
+                                        {template.title}
+                                        <span className="ml-1.5 text-xs text-muted">
+                                          · {PROMPT_TYPE_LABELS[template.prompt_type]}
+                                        </span>
+                                      </Label>
+                                    </Dropdown.Item>
+                                  ))}
+                                </Dropdown.Menu>
+                              </Dropdown.Popover>
+                            </Dropdown>
+                          ) : null}
+                        </div>
                         <TextArea
                           id="profile-prompt"
                           fullWidth
@@ -1067,7 +1125,37 @@ export function ProfileDetailPage() {
                         <FieldHint>Used for product description generation.</FieldHint>
                       </div>
                       <div className="space-y-2.5">
-                        <Label htmlFor="profile-image-prompt">Image prompt</Label>
+                        <div className="flex items-center justify-between gap-2">
+                          <Label htmlFor="profile-image-prompt">Image prompt</Label>
+                          {promptTemplates.length > 0 ? (
+                            <Dropdown>
+                              <Button variant="ghost" size="sm" type="button" isDisabled={busy}>
+                                Insert template
+                                <IconChevronDown className="size-3.5" />
+                              </Button>
+                              <Dropdown.Popover placement="bottom end">
+                                <Dropdown.Menu
+                                  aria-label="Insert a saved template into the image prompt"
+                                  onAction={(key) => {
+                                    const template = promptTemplates.find((item) => String(item.id) === key);
+                                    if (template) onInsertTemplate("image", template);
+                                  }}
+                                >
+                                  {templateOptionsFor("image").map((template) => (
+                                    <Dropdown.Item key={template.id} id={String(template.id)} textValue={template.title}>
+                                      <Label>
+                                        {template.title}
+                                        <span className="ml-1.5 text-xs text-muted">
+                                          · {PROMPT_TYPE_LABELS[template.prompt_type]}
+                                        </span>
+                                      </Label>
+                                    </Dropdown.Item>
+                                  ))}
+                                </Dropdown.Menu>
+                              </Dropdown.Popover>
+                            </Dropdown>
+                          ) : null}
+                        </div>
                         <TextArea
                           id="profile-image-prompt"
                           fullWidth
@@ -1361,6 +1449,18 @@ export function ProfileDetailPage() {
           </Modal.Container>
         </Modal.Backdrop>
       ) : null}
+
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Delete "${deleteTarget?.title ?? ""}"?`}
+        description="This permanently removes the product, its description, and its images. This cannot be undone."
+        confirmLabel="Delete product"
+        busy={busy}
+        onConfirm={() => void onConfirmDelete()}
+      />
 
       {selectedIds.length > 0 ? (
         <div className="fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 pointer-events-none">

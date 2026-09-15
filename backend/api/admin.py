@@ -21,8 +21,9 @@ class UserAdmin(admin.ModelAdmin):
 
 @admin.register(PromptTemplate)
 class PromptTemplateAdmin(admin.ModelAdmin):
-    list_display = ("id", "title", "slug", "owner", "is_active")
-    search_fields = ("title", "slug")
+    list_display = ("id", "title", "slug", "prompt_type", "category", "owner", "is_active")
+    list_filter = ("prompt_type", "is_active")
+    search_fields = ("title", "slug", "category")
     prepopulated_fields = {"slug": ("title",)}
 
 

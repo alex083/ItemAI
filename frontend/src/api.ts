@@ -142,11 +142,21 @@ export type Product = {
   images: ProductImage[];
 };
 
+export type PromptType = "description" | "image";
+
+export const PROMPT_TYPE_LABELS: Record<PromptType, string> = {
+  description: "Description",
+  image: "Image",
+};
+
 export type PromptTemplate = {
   id: number;
   slug: string;
   title: string;
   body: string;
+  prompt_type: PromptType;
+  prompt_type_label: string;
+  category: string;
   owner: number | null;
   can_edit: boolean;
 };
@@ -213,14 +223,22 @@ export function listPromptTemplates() {
   return request<PromptTemplate[]>("/api/prompt-templates/");
 }
 
-export function createPromptTemplate(payload: { title: string; body: string }) {
+export function createPromptTemplate(payload: {
+  title: string;
+  body: string;
+  prompt_type?: PromptType;
+  category?: string;
+}) {
   return request<PromptTemplate>("/api/prompt-templates/", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function updatePromptTemplate(id: number, payload: { title?: string; body?: string }) {
+export function updatePromptTemplate(
+  id: number,
+  payload: { title?: string; body?: string; prompt_type?: PromptType; category?: string },
+) {
   return request<PromptTemplate>(`/api/prompt-templates/${id}/`, {
     method: "PATCH",
     body: JSON.stringify(payload),
@@ -264,6 +282,7 @@ export function updateProfile(
     model?: string;
     image_model?: string;
     DeepSeekApiKey?: string;
+    prompt_template?: number | null;
     Prompt?: string;
     image_prompt?: string;
   },
